@@ -1,60 +1,76 @@
 #!/usr/bin/env python3
 """
 core/screen.py — KENWAY Screen Reader
-Captures the screen and extracts text via OCR (tesseract).
+Captures the active screen region and extracts text via OCR (pytesseract).
 """
 
 import logging
-import mss
-import pytesseract
-from PIL import Image
+import os
 
 log = logging.getLogger("kenway.screen")
 
 
-def read_screen(region: dict = None) -> str:
+def read_screen() -> str:
     """
-    Capture the full screen (or a region) and return OCR text.
-    region: {"top": y, "left": x, "width": w, "height": h} or None for full screen.
+    Take a screenshot of the full screen, run OCR, return cleaned text.
+    Speaks back a summary of what's on screen.
     """
     try:
+        import mss
+        import pytesseract
+        from PIL import Image
+        import tempfile
+
         with mss.mss() as sct:
-            monitor = region if region else sct.monitors[1]
+            # Capture primary monitor
+            monitor = sct.monitors[1]
             screenshot = sct.grab(monitor)
-            img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
 
-        # Tesseract config: fast mode, English
-        config = "--oem 3 --psm 6"
-        text = pytesseract.image_to_string(img, config=config)
-        cleaned = " ".join(text.split())
-        log.info(f"Screen read: {len(cleaned)} chars")
-        return cleaned
+            # Save to temp file
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            mss.tools.to_png(screenshot.rgb, screenshot.size, output=tmp.name)
+            tmp.close()
 
+        # OCR
+        img  = Image.open(tmp.name)
+        text = pytesseract.image_to_string(img).strip()
+        os.unlink(tmp.name)
+
+        if not text:
+            return "I couldn't read any text from the screen."
+
+        # Return first 400 chars — enough for a voice summary
+        summary = text[:400].replace("\n", " ").strip()
+        word_count = len(text.split())
+        log.info(f"Screen OCR: {word_count} words extracted.")
+        return f"I can see approximately {word_count} words on screen. Here's what I read: {summary}"
+
+    except ImportError as e:
+        return f"Screen reader requires mss and pytesseract. Missing: {e}"
     except Exception as e:
         log.error(f"Screen read error: {e}")
-        return "Could not read screen."
+        return f"Screen reading failed: {e}"
 
 
-def find_text_location(search_text: str) -> tuple:
-    """
-    Find the pixel location of specific text on screen.
-    Returns (x, y) center of the found text, or (None, None).
-    """
+def capture_region(x: int, y: int, w: int, h: int) -> str:
+    """Capture and OCR a specific screen region."""
     try:
-        with mss.mss() as sct:
-            screenshot = sct.grab(sct.monitors[1])
-            img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+        import mss
+        import pytesseract
+        from PIL import Image
+        import tempfile
 
-        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-        
-        for i, word in enumerate(data["text"]):
-            if search_text.lower() in word.lower() and int(data["conf"][i]) > 60:
-                x = data["left"][i] + data["width"][i] // 2
-                y = data["top"][i] + data["height"][i] // 2
-                log.info(f"Found '{search_text}' at ({x}, {y})")
-                return (x, y)
+        with mss.mss() as sct:
+            region = {"left": x, "top": y, "width": w, "height": h}
+            shot = sct.grab(region)
+            tmp  = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            mss.tools.to_png(shot.rgb, shot.size, output=tmp.name)
+            tmp.close()
+
+        text = pytesseract.image_to_string(Image.open(tmp.name)).strip()
+        os.unlink(tmp.name)
+        return text or "No text found in that region."
 
     except Exception as e:
-        log.error(f"find_text_location error: {e}")
-
-    return (None, None)
+        log.error(f"Region capture error: {e}")
+        return f"Region capture failed: {e}"

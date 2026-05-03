@@ -1,140 +1,144 @@
 #!/usr/bin/env python3
 """
-core/llm_bridge.py — KENWAY LLM Bridge (Ollama)
-Only called when user enables LLM mode via tray toggle.
-The LLM acts as a smart intent parser — it outputs JSON, never free-text chat.
+core/llm_bridge.py - KENWAY LLM Brain
+
+Uses qwen2.5:0.5b via Ollama (local, offline, AMD GPU accelerated).
+OLLAMA_KEEP_ALIVE=0 so model unloads from RAM immediately after response.
+
+The model ONLY does JSON intent extraction - it never chats.
+System prompt is strict: output JSON or nothing.
+
+Supported actions (must match executor.py dispatch table):
+  YOUTUBE_PLAY    data: search query string
+  SPOTIFY_PLAY    data: search query string
+  GOOGLE_SEARCH   data: search query string
+  OPEN_URL        data: url string
+  OPEN_APP        data: app name string
+  CLOSE_APP       data: app name string
+  VOLUME_SET      data: "up" | "down" | 0-100
+  BATTERY_STATUS  data: null
+  SHUTDOWN        data: null
+  UNKNOWN         data: original command string
 """
 
-import requests
 import json
 import logging
-import os
-import yaml
+import requests
 
 log = logging.getLogger("kenway.llm_bridge")
 
-# Short conversation memory — last 6 exchanges kept in RAM
-_memory: list[dict] = []
-MAX_MEMORY = 6
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+MODEL      = "qwen2.5:0.5b"
 
-SYSTEM_PROMPT = """You are KENWAY's intent parser brain. Your ONLY job is to parse the user's command and return a JSON object.
+SYSTEM_PROMPT = """You are KENWAY's intent parser. Your ONLY job is to convert a user command into a JSON object.
+
+Output ONLY valid JSON. No explanation. No markdown. No extra text. Just JSON.
+
+JSON format:
+{"action": "ACTION_NAME", "data": "value or null"}
 
 Available actions:
-  YOUTUBE_PLAY     - data: search query string
-  GOOGLE_SEARCH    - data: search query string
-  OPEN_URL         - data: full URL
-  OPEN_APP         - data: app name
-  CLOSE_APP        - data: app name
-  OPEN_FOLDER      - data: folder name (desktop/documents/downloads/music/pictures/videos/kenway/arduino/home)
-  OPEN_FILE        - data: filename
-  FILE_READ        - data: filename
-  FILE_WRITE       - data: [content, filename] as a list
-  FILE_LIST        - data: folder name or null
-  VOLUME_SET       - data: up / down / mute / unmute / 0-100
-  BRIGHTNESS_SET   - data: up / down / 0-100
-  BRIGHTNESS_GET   - data: null
-  BATTERY_STATUS   - data: null
-  READ_SCREEN      - data: null
-  SHUTDOWN         - data: null
-  REBOOT           - data: null
-
-Rules:
-- Return ONLY valid JSON. No explanation, no extra text.
-- Format: {"action": "ACTION_NAME", "data": <value or null>}
-- If the command is ambiguous, pick the most likely action.
-- Never return anything other than the JSON object.
+- YOUTUBE_PLAY   : play a video on YouTube. data = search query
+- SPOTIFY_PLAY   : play a song on Spotify. data = song/artist name
+- GOOGLE_SEARCH  : search Google. data = search query
+- OPEN_URL       : open a website. data = full URL
+- OPEN_APP       : open an application. data = app name
+- CLOSE_APP      : close an application. data = app name
+- VOLUME_SET     : change volume. data = "up", "down", or number 0-100
+- BATTERY_STATUS : check battery. data = null
+- SHUTDOWN       : shutdown the computer. data = null
+- UNKNOWN        : cannot determine intent. data = original command
 
 Examples:
-  "play old town road" -> {"action": "YOUTUBE_PLAY", "data": "old town road"}
-  "what's in my downloads?" -> {"action": "FILE_LIST", "data": "downloads"}
-  "make it brighter" -> {"action": "BRIGHTNESS_SET", "data": "up"}
-  "open the file I was editing" -> {"action": "OPEN_FILE", "data": "last_edited"}
-  "turn down the music" -> {"action": "VOLUME_SET", "data": "down"}
-"""
+Command: play that korean horse dance song
+{"action": "YOUTUBE_PLAY", "data": "gangnam style"}
+
+Command: open my code editor
+{"action": "OPEN_APP", "data": "code"}
+
+Command: how much battery do I have
+{"action": "BATTERY_STATUS", "data": null}
+
+Command: turn up the volume
+{"action": "VOLUME_SET", "data": "up"}
+
+Command: search how to fix a segfault in c
+{"action": "GOOGLE_SEARCH", "data": "how to fix segfault in c"}"""
 
 
-def _cfg():
-    path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
-    with open(path) as f:
-        return yaml.safe_load(f)["llm"]
-
-
-def _is_ollama_running() -> bool:
-    try:
-        r = requests.get("http://localhost:11434/api/tags", timeout=2)
-        return r.status_code == 200
-    except Exception:
-        return False
-
-
-def ask(command: str) -> dict:
+def parse(command: str) -> dict:
     """
-    Send command to Ollama, get back a parsed intent dict.
-    Falls back to direct parser if Ollama is unreachable.
+    Send command to qwen2.5:0.5b and return parsed intent dict.
+    Falls back to UNKNOWN if model returns invalid JSON or times out.
+    Model unloads from RAM after response (keep_alive=0).
     """
-    global _memory
+    log.info(f"LLM parsing: '{command}'")
 
-    if not _is_ollama_running():
-        log.warning("Ollama not running — falling back to direct parser.")
-        from core.intent_parser import parse
-        return parse(command)
-
-    cfg = _cfg()
-    model = cfg.get("model", "qwen2.5:1.5b")
-
-    # Build context from memory
-    memory_ctx = ""
-    if _memory:
-        lines = [f"User: {m['user']}\nIntent: {m['intent']}" for m in _memory[-3:]]
-        memory_ctx = "\nRecent context:\n" + "\n".join(lines) + "\n"
-
-    prompt = f"{SYSTEM_PROMPT}{memory_ctx}\nCommand: {command}\nJSON:"
+    payload = {
+        "model":      MODEL,
+        "prompt":     f"Command: {command}",
+        "system":     SYSTEM_PROMPT,
+        "stream":     False,
+        "keep_alive": 0,       # unload model from RAM immediately after response
+        "options": {
+            "temperature": 0,  # deterministic output
+            "num_predict": 64, # JSON never needs more than 64 tokens
+        }
+    }
 
     try:
-        log.info(f"Sending to Ollama [{model}]: {command}")
-        r = requests.post(
-            "http://localhost:11434/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False},
-            timeout=cfg.get("timeout", 30)
+        response = requests.post(
+            OLLAMA_URL,
+            json=payload,
+            timeout=15          # max 15s on slow CPU
         )
-        raw = r.json().get("response", "").strip()
-        log.info(f"Ollama raw response: {raw}")
+        response.raise_for_status()
 
-        # Extract JSON even if wrapped in markdown code blocks
-        if "```" in raw:
-            raw = raw.split("```")[1].strip()
+        raw = response.json().get("response", "").strip()
+        log.info(f"LLM raw response: {raw}")
+
+        # Strip markdown code fences if model added them
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
             if raw.startswith("json"):
-                raw = raw[4:].strip()
+                raw = raw[4:]
+            raw = raw.strip()
 
         intent = json.loads(raw)
+
+        # Validate required fields
+        if "action" not in intent:
+            raise ValueError("No 'action' field in response")
+
         intent["mode"] = "llm"
-
-        # Store in memory
-        _memory.append({"user": command, "intent": json.dumps(intent)})
-        if len(_memory) > MAX_MEMORY:
-            _memory.pop(0)
-
         log.info(f"LLM intent: {intent}")
         return intent
 
-    except json.JSONDecodeError as e:
-        log.error(f"LLM JSON parse failed: {e} | raw: {raw}")
-        from core.intent_parser import parse
-        return parse(command)
+    except requests.exceptions.ConnectionError:
+        log.error("Ollama not running. Start with: ollama serve")
+        return {"action": "UNKNOWN", "data": command, "mode": "llm",
+                "error": "Ollama not running"}
+
+    except requests.exceptions.Timeout:
+        log.error("LLM timed out after 15s")
+        return {"action": "UNKNOWN", "data": command, "mode": "llm",
+                "error": "LLM timeout"}
+
+    except (json.JSONDecodeError, ValueError) as e:
+        log.error(f"LLM returned invalid JSON: {e} | raw: {raw}")
+        return {"action": "UNKNOWN", "data": command, "mode": "llm",
+                "error": f"Invalid JSON: {e}"}
+
     except Exception as e:
-        log.error(f"LLM bridge error: {e}")
-        from core.intent_parser import parse
-        return parse(command)
+        log.error(f"LLM bridge unexpected error: {e}")
+        return {"action": "UNKNOWN", "data": command, "mode": "llm",
+                "error": str(e)}
 
 
-def clear_memory():
-    global _memory
-    _memory = []
-    log.info("LLM memory cleared.")
-
-
-def get_memory_summary() -> str:
-    if not _memory:
-        return "No conversation memory yet."
-    lines = [f"{i+1}. {m['user']}" for i, m in enumerate(_memory)]
-    return "Recent commands: " + "; ".join(lines)
+def is_ollama_running() -> bool:
+    """Quick health check before attempting LLM parse."""
+    try:
+        r = requests.get("http://127.0.0.1:11434/", timeout=2)
+        return r.status_code == 200
+    except Exception:
+        return False

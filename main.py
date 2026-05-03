@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 """
-KENWAY — Main Entry Point
+main.py - KENWAY Entry Point
+
+Dual-brain architecture:
+  DIRECT MODE (default) : regex rule engine, zero LLM, instant response
+  LLM MODE (toggled ON) : qwen2.5:0.5b via Ollama for ambiguous commands
+
+LLM toggle lives in the system tray icon.
+Model unloads from RAM after each response (keep_alive=0).
 """
 
 import sys
 import logging
-import threading
-
-print("[KENWAY] Starting up...")
-
 from PyQt5.QtWidgets import QApplication
-from core.voice import speak
-from core.hooks import on_startup
-from ui.tray_icon import KenwayTray
-from ui.input_bar import KenwayInputBar
 
-print("[KENWAY] All modules loaded.")
-
-# ── Logging ───────────────────────────────────────────────────────────────
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -26,65 +23,80 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
-log = logging.getLogger("kenway")
+log = logging.getLogger("kenway.main")
+
+# ---------------------------------------------------------------------------
+# Global LLM toggle state
+# ---------------------------------------------------------------------------
+LLM_ENABLED = False
 
 
-def handle_command(command: str, llm_enabled: bool):
-    """
-    Central command dispatcher.
-    Routes through intent_parser (Direct Mode) or llm_bridge (LLM Mode).
-    """
-    if not command.strip():
+def set_llm_enabled(state: bool):
+    global LLM_ENABLED
+    LLM_ENABLED = state
+    status = "ON" if state else "OFF"
+    log.info(f"LLM mode: {status}")
+    from core.voice import speak
+    if state:
+        from core.llm_bridge import is_ollama_running
+        if not is_ollama_running():
+            speak("Warning: Ollama is not running. Start it with ollama serve.")
+            return
+    speak(f"L L M mode is now {status}.")
+
+
+# ---------------------------------------------------------------------------
+# Command handler — called by input bar on submit
+# ---------------------------------------------------------------------------
+
+def handle_command(command: str):
+    command = command.strip()
+    if not command:
         return
 
-    log.info(f"Command [{('LLM' if llm_enabled else 'DIRECT')}]: {command}")
-    print(f"[KENWAY] Executing: {command}")
+    log.info(f"Command received: '{command}'")
 
-    # Parse intent
-    if llm_enabled:
-        from core.llm_bridge import ask
-        intent = ask(command)
-    else:
-        from core.intent_parser import parse
-        intent = parse(command)
-
-    print(f"[KENWAY] Intent: {intent}")
-
-    # Dispatch to skill
+    from core.voice import speak
     from core.executor import dispatch
-    threading.Thread(target=dispatch, args=(intent,), daemon=True).start()
 
+    if LLM_ENABLED:
+        from core.llm_bridge import parse as llm_parse
+        intent = llm_parse(command)
+    else:
+        from core.intent_parser import parse as direct_parse
+        intent = direct_parse(command)
+
+    # If direct mode couldn't match, suggest enabling LLM
+    if intent["action"] == "UNKNOWN" and not LLM_ENABLED:
+        speak("I don't recognise that command. Enable LLM mode for smarter parsing.")
+        return
+
+    dispatch(intent, speak_fn=speak)
+
+
+# ---------------------------------------------------------------------------
+# Boot
+# ---------------------------------------------------------------------------
 
 def main():
-    log.info("KENWAY starting up...")
-
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
-    from PyQt5.QtWidgets import QSystemTrayIcon
-    if not QSystemTrayIcon.isSystemTrayAvailable():
-        print("[KENWAY] WARNING: No system tray available!")
+    # Boot greeting
+    from core.hooks import on_startup
+    on_startup()
 
-    tray = KenwayTray(app)
+    # System tray with LLM toggle
+    from ui.tray_icon import KenwayTray
+    tray = KenwayTray(app, llm_toggle_fn=set_llm_enabled)
+    tray.show()
 
-    input_bar = KenwayInputBar(
-        on_submit=lambda cmd: handle_command(cmd, tray.llm_enabled)
-    )
-    tray.set_input_bar(input_bar)
+    # Floating input bar
+    from ui.input_bar import InputBar
+    bar = InputBar(on_submit=handle_command)
+    bar.register_hotkey()   # Super+Space
 
-    # Register hotkey: Alt+K
-    try:
-        from pynput import keyboard
-        hotkey = keyboard.GlobalHotKeys({"<alt>+k": input_bar.show_bar})
-        hotkey.start()
-        print("[KENWAY] Hotkey Alt+K registered.")
-    except Exception as e:
-        print(f"[KENWAY] Hotkey failed: {e}. Use tray to open bar.")
-
-    # Boot greeting after Qt is running
-    threading.Thread(target=on_startup, daemon=True).start()
-
-    print("[KENWAY] Online. Alt+K = command bar. Right-click tray for menu.")
+    log.info("KENWAY online.")
     sys.exit(app.exec_())
 
 

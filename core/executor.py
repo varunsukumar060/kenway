@@ -1,103 +1,125 @@
 #!/usr/bin/env python3
 """
-core/executor.py — KENWAY Action Dispatcher (Phase 3)
-Added SPOTIFY_PLAY routing.
+core/executor.py - KENWAY Action Dispatcher
+
+Routes parsed intent dicts to the correct skill function.
+Works identically for both direct mode and LLM mode intents
+since both produce the same {action, data} structure.
 """
 
 import logging
-from core.voice import speak
 
 log = logging.getLogger("kenway.executor")
 
 
-def dispatch(intent: dict):
+def dispatch(intent: dict, speak_fn=None) -> str:
+    """
+    Execute the action described in intent.
+    Returns a response string (also spoken if speak_fn provided).
+
+    intent = {
+        "action": "YOUTUBE_PLAY",
+        "data":   "gangnam style",
+        "mode":   "direct" | "llm"
+    }
+    """
     action = intent.get("action", "UNKNOWN")
-    data   = intent.get("data")
-    log.info(f"Dispatching action={action} data={data}")
+    data   = intent.get("data", "")
+    mode   = intent.get("mode", "direct")
 
-    if action == "VOLUME_SET":
-        from skills.system_skill import set_volume
-        speak(set_volume(data))
+    log.info(f"Dispatching [{mode}]: {action} | data={data}")
 
-    elif action == "BATTERY_STATUS":
-        from skills.system_skill import get_battery
-        speak(get_battery())
+    response = _route(action, data)
 
-    elif action == "BRIGHTNESS_SET":
-        from skills.system_skill import set_brightness
-        speak(set_brightness(data))
+    if speak_fn and response:
+        speak_fn(response)
 
-    elif action == "BRIGHTNESS_GET":
-        from skills.system_skill import get_brightness
-        speak(get_brightness())
+    return response
 
-    elif action == "SHUTDOWN":
-        speak("Shutting down in 5 seconds, Varun.")
-        import time; time.sleep(5)
-        import subprocess; subprocess.run(["shutdown", "-h", "now"])
 
-    elif action == "REBOOT":
-        speak("Rebooting in 5 seconds, Varun.")
-        import time; time.sleep(5)
-        import subprocess; subprocess.run(["reboot"])
-
-    elif action == "OPEN_APP":
-        from skills.app_skill import launch_app
-        speak(launch_app(data))
-
-    elif action == "CLOSE_APP":
-        from skills.app_skill import close_app
-        speak(close_app(data))
-
-    elif action == "YOUTUBE_PLAY":
-        speak(f"Searching YouTube for {data}, one moment.")
+def _route(action: str, data) -> str:
+    # ----------------------------------------------------------------
+    # Browser skills
+    # ----------------------------------------------------------------
+    if action == "YOUTUBE_PLAY":
         from skills.browser_skill import play_on_youtube
-        speak(play_on_youtube(data))
+        return play_on_youtube(str(data))
 
-    elif action == "SPOTIFY_PLAY":
-        speak(f"Opening Spotify for {data}.")
+    if action == "SPOTIFY_PLAY":
         from skills.browser_skill import play_on_spotify
-        speak(play_on_spotify(data))
+        return play_on_spotify(str(data))
 
-    elif action == "GOOGLE_SEARCH":
+    if action == "GOOGLE_SEARCH":
         from skills.browser_skill import search_google
-        speak(search_google(data))
+        return search_google(str(data))
 
-    elif action == "OPEN_URL":
+    if action == "OPEN_URL":
         from skills.browser_skill import open_url_direct
-        speak(open_url_direct(data))
+        return open_url_direct(str(data))
 
-    elif action == "OPEN_FOLDER":
-        from skills.folder_skill import open_folder
-        speak(open_folder(data))
+    # ----------------------------------------------------------------
+    # App skills (stub — skills/app_skill.py built in Phase 3)
+    # ----------------------------------------------------------------
+    if action == "OPEN_APP":
+        import subprocess
+        app = str(data).lower().strip()
+        try:
+            subprocess.Popen([app],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            return f"Opening {app}."
+        except FileNotFoundError:
+            return f"Could not find application: {app}"
 
-    elif action == "LIST_FOLDER":
-        from skills.folder_skill import list_folder_contents
-        speak(list_folder_contents(data))
+    if action == "CLOSE_APP":
+        import subprocess
+        app = str(data).lower().strip()
+        subprocess.run(["pkill", "-x", app], capture_output=True)
+        return f"Closed {app}."
 
-    elif action == "OPEN_FILE":
-        from skills.file_skill import open_file
-        speak(open_file(data))
+    # ----------------------------------------------------------------
+    # System skills (stub — skills/system_skill.py built in Phase 3)
+    # ----------------------------------------------------------------
+    if action == "VOLUME_SET":
+        import subprocess
+        d = str(data).strip().lower()
+        if d == "up":
+            subprocess.run(["amixer", "-q", "sset", "Master", "5%+"])
+            return "Volume up."
+        elif d == "down":
+            subprocess.run(["amixer", "-q", "sset", "Master", "5%-"])
+            return "Volume down."
+        elif d.isdigit():
+            subprocess.run(["amixer", "-q", "sset", "Master", f"{d}%"])
+            return f"Volume set to {d}%."
+        return "Volume command not understood."
 
-    elif action == "FILE_READ":
-        from skills.file_skill import read_file
-        speak(read_file(data))
+    if action == "BATTERY_STATUS":
+        try:
+            with open("/sys/class/power_supply/BAT0/capacity") as f:
+                pct = f.read().strip()
+            with open("/sys/class/power_supply/BAT0/status") as f:
+                status = f.read().strip()
+            return f"Battery is at {pct}%, currently {status}."
+        except FileNotFoundError:
+            return "Could not read battery status."
 
-    elif action == "FILE_WRITE":
-        if isinstance(data, (list, tuple)) and len(data) == 2:
-            from skills.file_skill import write_file
-            speak(write_file(data[0], data[1]))
-        else:
-            speak("I couldn't parse that file write command.")
+    if action == "SHUTDOWN":
+        import subprocess
+        from core.voice import speak
+        speak("Shutting down. Goodbye, Varun.")
+        subprocess.run(["shutdown", "-h", "now"])
+        return ""
 
-    elif action == "FILE_LIST":
-        from skills.file_skill import list_files
-        speak(list_files(data))
+    # ----------------------------------------------------------------
+    # Unknown
+    # ----------------------------------------------------------------
+    if action == "UNKNOWN":
+        error = intent.get("error", "")
+        if "Ollama not running" in error:
+            return "LLM mode is on but Ollama is not running. Start it with: ollama serve"
+        if "timeout" in error.lower():
+            return "LLM took too long to respond. Try a simpler command or switch to direct mode."
+        return f"I didn't understand that command: {data}"
 
-    elif action == "READ_SCREEN":
-        from core.screen import read_screen
-        speak(read_screen())
-
-    else:
-        log.warning(f"Unknown action: {action}")
-        speak("I don't recognise that command. Enable LLM mode for complex requests.")
+    return f"Unknown action: {action}"

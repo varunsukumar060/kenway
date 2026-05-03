@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-core/executor.py — KENWAY Action Dispatcher
+core/executor.py — KENWAY Action Dispatcher (Phase 3)
+Added SPOTIFY_PLAY routing.
 """
 
 import logging
@@ -14,7 +15,6 @@ def dispatch(intent: dict):
     data   = intent.get("data")
     log.info(f"Dispatching action={action} data={data}")
 
-    # ── System ──────────────────────────────────────────────────────────────
     if action == "VOLUME_SET":
         from skills.system_skill import set_volume
         speak(set_volume(data))
@@ -32,7 +32,7 @@ def dispatch(intent: dict):
         speak(get_brightness())
 
     elif action == "SHUTDOWN":
-        speak("Shutting down your system in 5 seconds, Varun.")
+        speak("Shutting down in 5 seconds, Varun.")
         import time; time.sleep(5)
         import subprocess; subprocess.run(["shutdown", "-h", "now"])
 
@@ -41,7 +41,6 @@ def dispatch(intent: dict):
         import time; time.sleep(5)
         import subprocess; subprocess.run(["reboot"])
 
-    # ── Apps ──────────────────────────────────────────────────────────────
     elif action == "OPEN_APP":
         from skills.app_skill import launch_app
         speak(launch_app(data))
@@ -50,10 +49,15 @@ def dispatch(intent: dict):
         from skills.app_skill import close_app
         speak(close_app(data))
 
-    # ── Browser ────────────────────────────────────────────────────────────
     elif action == "YOUTUBE_PLAY":
+        speak(f"Searching YouTube for {data}, one moment.")
         from skills.browser_skill import play_on_youtube
         speak(play_on_youtube(data))
+
+    elif action == "SPOTIFY_PLAY":
+        speak(f"Opening Spotify for {data}.")
+        from skills.browser_skill import play_on_spotify
+        speak(play_on_spotify(data))
 
     elif action == "GOOGLE_SEARCH":
         from skills.browser_skill import search_google
@@ -63,7 +67,6 @@ def dispatch(intent: dict):
         from skills.browser_skill import open_url_direct
         speak(open_url_direct(data))
 
-    # ── Folders ────────────────────────────────────────────────────────────
     elif action == "OPEN_FOLDER":
         from skills.folder_skill import open_folder
         speak(open_folder(data))
@@ -72,7 +75,6 @@ def dispatch(intent: dict):
         from skills.folder_skill import list_folder_contents
         speak(list_folder_contents(data))
 
-    # ── Files ──────────────────────────────────────────────────────────────
     elif action == "OPEN_FILE":
         from skills.file_skill import open_file
         speak(open_file(data))
@@ -96,7 +98,6 @@ def dispatch(intent: dict):
         from core.screen import read_screen
         speak(read_screen())
 
-    # ── Unknown ──────────────────────────────────────────────────────────────
     else:
         log.warning(f"Unknown action: {action}")
         speak("I don't recognise that command. Enable LLM mode for complex requests.")

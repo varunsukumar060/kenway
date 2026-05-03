@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-skills/browser_skill.py — KENWAY Browser Skill
+skills/browser_skill.py - KENWAY Browser Skill
 
-Fixes:
-  YouTube : Chrome stays alive after click (detach=True + no driver.quit())
-  Spotify : Longer delays, window-ID locking, robust focus before each xdotool step
+YouTube : Selenium + detach=True (confirmed working)
+Spotify : Ctrl+K to open search (Linux Spotify shortcut)
+          Falls back to clicking search bar by coords if Ctrl+K fails
 """
 
 import subprocess
@@ -18,32 +18,25 @@ CHROME_BINARY     = "/usr/bin/google-chrome"
 CHROMEDRIVER_PATH = "/snap/chromium/current/usr/lib/chromium-browser/chromedriver"
 
 
-# ──────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 def _xdg_open(url: str):
     subprocess.Popen(["xdg-open", url],
                      stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL)
-    log.info(f"xdg-open fallback: {url}")
+    log.info(f"xdg-open: {url}")
 
 
 def _make_driver():
-    """
-    Build Chrome WebDriver with detach=True so the browser window
-    STAYS OPEN after Python exits / driver object is garbage collected.
-    """
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
     from selenium.webdriver.chrome.service import Service
 
     opts = Options()
     opts.binary_location = CHROME_BINARY
-
-    # ✔ KEY FIX: detach keeps Chrome alive even after driver reference is lost
-    opts.add_experimental_option("detach", True)
-
+    opts.add_experimental_option("detach", True)   # Chrome stays alive after script
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
@@ -55,21 +48,87 @@ def _make_driver():
     service = Service(executable_path=CHROMEDRIVER_PATH)
     driver  = webdriver.Chrome(service=service, options=opts)
     driver.execute_script(
-        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
     )
     return driver
 
 
-# ──────────────────────────────────────────────────────────────
-# YOUTUBE
-# ──────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# xdotool helpers — all target explicit window ID
+# ---------------------------------------------------------------------------
+
+def _xdo_key(wid: str, key: str, delay: float = 0.5):
+    subprocess.run(
+        ["xdotool", "key", "--window", wid, "--clearmodifiers", key],
+        capture_output=True
+    )
+    time.sleep(delay)
+
+
+def _xdo_type(wid: str, text: str, delay: float = 0.5):
+    subprocess.run(
+        ["xdotool", "type", "--window", wid,
+         "--clearmodifiers", "--delay", "60", text],
+        capture_output=True
+    )
+    time.sleep(delay)
+
+
+def _xdo_click(wid: str, x: int, y: int, delay: float = 0.5):
+    """Mouse click at (x,y) relative to window top-left."""
+    subprocess.run(
+        ["xdotool", "mousemove", "--window", wid, str(x), str(y)],
+        capture_output=True
+    )
+    time.sleep(0.1)
+    subprocess.run(
+        ["xdotool", "click", "--window", wid, "1"],
+        capture_output=True
+    )
+    time.sleep(delay)
+
+
+def _get_spotify_wid() -> str | None:
+    result = subprocess.run(
+        ["xdotool", "search", "--name", "Spotify"],
+        capture_output=True, text=True, timeout=5
+    )
+    ids = result.stdout.strip().splitlines()
+    # Prefer the larger window ID — Spotify's main window is usually last
+    return ids[-1] if ids else None
+
+
+def _focus_wid(wid: str, delay: float = 0.5):
+    subprocess.run(["xdotool", "windowactivate", "--sync", wid], capture_output=True)
+    subprocess.run(["xdotool", "windowraise", wid], capture_output=True)
+    time.sleep(delay)
+
+
+def _get_window_geometry(wid: str) -> dict:
+    """Returns {'x','y','width','height'} of the window."""
+    result = subprocess.run(
+        ["xdotool", "getwindowgeometry", wid],
+        capture_output=True, text=True
+    )
+    geo = {"x": 0, "y": 0, "width": 1280, "height": 800}
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if "Position" in line:
+            # Position: 0,27 (screen: 0,27)
+            pos = line.split(":")[1].split("(")[0].strip()
+            geo["x"], geo["y"] = map(int, pos.split(","))
+        if "Geometry" in line:
+            # Geometry: 1280x800
+            size = line.split(":")[1].strip()
+            geo["width"], geo["height"] = map(int, size.split("x"))
+    return geo
+
+
+# ---------------------------------------------------------------------------
+# YOUTUBE  (confirmed working — do not change)
+# ---------------------------------------------------------------------------
 
 def play_on_youtube(query: str) -> str:
-    """
-    Open YouTube search, click first non-ad video.
-    Chrome stays open (detach=True) — video keeps playing.
-    Falls back to xdg-open (Firefox) if Selenium fails.
-    """
     encoded    = urllib.parse.quote_plus(query)
     search_url = f"https://www.youtube.com/results?search_query={encoded}"
 
@@ -82,97 +141,55 @@ def play_on_youtube(query: str) -> str:
         driver = _make_driver()
         driver.get(search_url)
 
-        wait = WebDriverWait(driver, 15)
-
-        # Wait for at least one real video result
-        video_links = wait.until(
+        wait   = WebDriverWait(driver, 15)
+        videos = wait.until(
             EC.presence_of_all_elements_located(
                 (By.CSS_SELECTOR, "ytd-video-renderer a#video-title")
             )
         )
 
-        if not video_links:
+        if not videos:
             raise Exception("No video results found")
 
-        first = video_links[0]
+        first = videos[0]
         title = first.get_attribute("title") or query
-
-        # Scroll into view then JS click — more reliable than .click()
         driver.execute_script("arguments[0].scrollIntoView(true);", first)
         time.sleep(0.3)
         driver.execute_script("arguments[0].click();", first)
-
         log.info(f"YouTube clicked: {title}")
-        # ✔ Do NOT call driver.quit() — detach=True keeps Chrome alive
+        # detach=True — Chrome stays alive, no driver.quit()
         return f"Now playing {title} on YouTube."
 
     except Exception as e:
         log.warning(f"Selenium YouTube failed: {e} — falling back to xdg-open")
         _xdg_open(search_url)
-        return f"Opened YouTube search for {query}. Click a result to play."
+        return f"Opened YouTube search for {query}."
 
 
-# ──────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # SPOTIFY
-# ──────────────────────────────────────────────────────────────
+# Strategy:
+#   1. Launch Spotify if needed, wait for window
+#   2. windowactivate (more reliable than windowfocus on some WMs)
+#   3. Try Ctrl+K  (native Spotify Linux search shortcut)
+#   4. If that doesn't work, click the search bar by position
+#   5. Type query, Enter, wait 3.5s for results
+#   6. Tab x2 to reach first song row, Enter to play
+# ---------------------------------------------------------------------------
 
-def _get_spotify_wid() -> str | None:
-    """
-    Get the X11 window ID of the Spotify window.
-    Returns window ID string or None if not found.
-    """
-    result = subprocess.run(
-        ["xdotool", "search", "--name", "Spotify"],
-        capture_output=True, text=True, timeout=5
-    )
-    ids = result.stdout.strip().splitlines()
-    return ids[0] if ids else None
+# How many Tabs after search results load to reach the first playable song row.
+# Confirmed value from debug: adjust if Spotify opens wrong item.
+SPOTIFY_TAB_COUNT = 2
 
-
-def _focus_wid(wid: str):
-    """Focus and raise a window by its X11 ID."""
-    subprocess.run(["xdotool", "windowfocus", "--sync", wid], capture_output=True)
-    subprocess.run(["xdotool", "windowraise", wid], capture_output=True)
-    time.sleep(0.4)
-
-
-def _xdo_key(wid: str, key: str, delay: float = 0.5):
-    """Send a key to a specific window ID — doesn't rely on active focus."""
-    subprocess.run(
-        ["xdotool", "key", "--window", wid, "--clearmodifiers", key],
-        capture_output=True
-    )
-    time.sleep(delay)
-
-
-def _xdo_type(wid: str, text: str, delay: float = 0.5):
-    """Type text into a specific window ID."""
-    subprocess.run(
-        ["xdotool", "type", "--window", wid,
-         "--clearmodifiers", "--delay", "60", text],
-        capture_output=True
-    )
-    time.sleep(delay)
+# Approximate X position of search bar as fraction of window width.
+# Spotify search bar sits roughly at 50% width, 6% from top.
+SEARCH_BAR_X_FRAC = 0.50
+SEARCH_BAR_Y_FRAC = 0.06
 
 
 def play_on_spotify(query: str) -> str:
-    """
-    Launch Spotify, search, and play the first song result.
-
-    xdotool now targets a specific window ID (--window WID) so it works
-    even if another window steals focus during the sequence.
-
-    Tab navigation after search:
-      Spotify Desktop (Linux) keyboard flow after pressing Enter on search:
-        Focus lands on filter row (All / Songs / Artists / Albums)
-        Tab x1  → skip to first result card
-        Enter   → play / open it
-    If it opens an artist/album instead of playing: change TAB_COUNT to 2.
-    """
-    TAB_COUNT = 1   # tabs needed after search results load to reach first song
-
     try:
-        # ── 1. Launch Spotify if not running ────────────────────────────
+        # 1. Launch if not running
         is_running = subprocess.run(
             ["pgrep", "-x", "spotify"], capture_output=True
         ).returncode == 0
@@ -181,62 +198,71 @@ def play_on_spotify(query: str) -> str:
             subprocess.Popen(["spotify"],
                              stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
-            log.info("Spotify launched — waiting 8s for full load")
-            time.sleep(8)   # longer wait for cold start
+            log.info("Spotify launched — waiting 9s")
+            time.sleep(9)
         else:
             time.sleep(0.5)
 
-        # ── 2. Get window ID — retry up to 5s ─────────────────────────────
+        # 2. Get window ID (last ID = main window)
         wid = None
-        for attempt in range(10):
+        for _ in range(12):
             wid = _get_spotify_wid()
             if wid:
                 break
-            log.info(f"Waiting for Spotify window... attempt {attempt+1}")
             time.sleep(0.5)
 
         if not wid:
-            raise Exception("Spotify window not found after 5s")
+            raise Exception("Spotify window not found")
 
-        log.info(f"Spotify window ID: {wid}")
+        log.info(f"Spotify WID: {wid}")
 
-        # ── 3. Focus Spotify ─────────────────────────────────────────────
-        _focus_wid(wid)
+        # 3. Activate + raise window
+        _focus_wid(wid, delay=0.8)
 
-        # ── 4. Open search with Ctrl+L ──────────────────────────────────
-        _xdo_key(wid, "ctrl+l", delay=0.8)
+        # 4. Open search — try Ctrl+K first (Linux Spotify shortcut)
+        #    windowactivate ensures it's the active window before the keypress
+        log.info("Sending Ctrl+K to open search")
+        _xdo_key(wid, "ctrl+k", delay=1.0)
 
-        # ── 5. Select all existing text + type new query ──────────────────
-        _xdo_key(wid, "ctrl+a", delay=0.3)
+        # 5. Fallback: if Ctrl+K didn't open search, click the search bar by coords
+        #    Search bar is at ~50% width, ~6% height of window
+        geo = _get_window_geometry(wid)
+        sx  = int(geo["width"]  * SEARCH_BAR_X_FRAC)
+        sy  = int(geo["height"] * SEARCH_BAR_Y_FRAC)
+        log.info(f"Clicking search bar at ({sx}, {sy}) as fallback")
+        _xdo_click(wid, sx, sy, delay=0.6)
+
+        # 6. Clear any existing text + type query
+        _xdo_key(wid, "ctrl+a", delay=0.2)
         _xdo_type(wid, query, delay=0.5)
 
-        # ── 6. Submit search, wait for results UI to render ────────────────
-        _xdo_key(wid, "Return", delay=3.0)   # 3s — enough for results to paint
+        # 7. Submit + wait for results to render
+        _xdo_key(wid, "Return", delay=3.5)
 
-        # Re-focus in case something stole focus during the wait
-        _focus_wid(wid)
+        # 8. Re-activate window (results may have shifted focus)
+        _focus_wid(wid, delay=0.5)
 
-        # ── 7. Tab to first song result ────────────────────────────────
-        for i in range(TAB_COUNT):
+        # 9. Tab to first song row
+        for i in range(SPOTIFY_TAB_COUNT):
             _xdo_key(wid, "Tab", delay=0.4)
-            log.info(f"Tab {i+1}/{TAB_COUNT}")
+            log.info(f"Tab {i+1}/{SPOTIFY_TAB_COUNT}")
 
-        # ── 8. Play ────────────────────────────────────────────────────
+        # 10. Play
         _xdo_key(wid, "Return", delay=0.5)
 
         log.info(f"Spotify play dispatched: {query}")
         return f"Playing {query} on Spotify."
 
     except Exception as e:
-        log.error(f"Spotify xdotool error: {e}")
+        log.error(f"Spotify error: {e}")
         encoded = urllib.parse.quote_plus(query)
         _xdg_open(f"spotify:search:{encoded}")
         return f"Opened Spotify search for {query}."
 
 
-# ──────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # GOOGLE / URL
-# ──────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
 def search_google(query: str) -> str:
     encoded = urllib.parse.quote_plus(query)

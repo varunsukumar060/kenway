@@ -6,17 +6,25 @@ Dual-brain architecture:
   DIRECT MODE (default) : regex rule engine, zero LLM, instant response
   LLM MODE (toggled ON) : qwen2.5:0.5b via Ollama for ambiguous commands
 
-Hotkey: Alt+K (global, works regardless of focused window)
-Requires: pip install keyboard  AND  run with sudo OR add user to input group:
-  sudo usermod -aG input $USER  (then log out and back in)
+Hotkey strategy:
+  KENWAY listens on a Unix socket at /tmp/kenway.sock
+  A tiny trigger script (scripts/trigger.sh) sends a signal to that socket.
+  That trigger script is bound to Ctrl+F12 in XFCE keyboard settings.
+  This works globally with zero terminal conflicts.
+
+  Setup (one-time):
+    xfce4-keyboard-settings -> Application Shortcuts
+    Command : bash /home/<you>/kenway/scripts/trigger.sh
+    Key     : Ctrl+F12  (or any key with no conflicts)
 """
 
 import sys
 import logging
 import os
 import threading
+import socket
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
+from PyQt5.QtCore import QMetaObject, Qt
 
 os.environ.setdefault("OLLAMA_KEEP_ALIVE", "0")
 
@@ -30,6 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("kenway.main")
 
+SOCKET_PATH = "/tmp/kenway.sock"
 LLM_ENABLED = False
 
 
@@ -66,32 +75,32 @@ def handle_command(command: str):
     dispatch(intent, speak_fn=speak)
 
 
-def _start_global_hotkey(bar):
+def _socket_listener(bar):
     """
-    Run in a daemon thread.
-    Listens for Alt+K globally and calls bar.show_bar() thread-safely.
-    Requires 'keyboard' lib and /dev/input read access.
+    Listens on Unix socket /tmp/kenway.sock.
+    Any connection (even empty) triggers the input bar to appear.
+    The trigger script just does: echo '' | nc -U /tmp/kenway.sock
     """
-    try:
-        import keyboard
-        def _trigger():
-            # Must call Qt UI from main thread — use invokeMethod
-            QMetaObject.invokeMethod(bar, "show_bar", Qt.QueuedConnection)
-            log.info("Global hotkey Alt+K triggered.")
+    # Clean up stale socket
+    if os.path.exists(SOCKET_PATH):
+        os.remove(SOCKET_PATH)
 
-        keyboard.add_hotkey("alt+k", _trigger)
-        log.info("Global hotkey active: Alt+K")
-        keyboard.wait()   # blocks this thread forever, listening for hotkeys
-    except ImportError:
-        log.error("'keyboard' library not installed. Run: pip install keyboard")
-    except PermissionError:
-        log.error(
-            "No permission to read /dev/input. Fix with:\n"
-            "  sudo usermod -aG input $USER\n"
-            "  then log out and back in, or run KENWAY with sudo."
-        )
-    except Exception as e:
-        log.error(f"Global hotkey error: {e}")
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(SOCKET_PATH)
+    server.listen(1)
+    os.chmod(SOCKET_PATH, 0o600)
+    log.info(f"Socket listener active: {SOCKET_PATH}")
+
+    while True:
+        try:
+            conn, _ = server.accept()
+            conn.close()
+            # Thread-safe call to Qt main thread
+            QMetaObject.invokeMethod(bar, "show_bar", Qt.QueuedConnection)
+            log.info("Socket trigger received — showing input bar.")
+        except Exception as e:
+            log.error(f"Socket listener error: {e}")
+            break
 
 
 def main():
@@ -108,15 +117,16 @@ def main():
     from ui.input_bar import KenwayInputBar
     bar = KenwayInputBar(on_submit=handle_command)
 
-    # Global hotkey in background daemon thread
-    hotkey_thread = threading.Thread(
-        target=_start_global_hotkey,
+    # Socket listener in background daemon thread
+    sock_thread = threading.Thread(
+        target=_socket_listener,
         args=(bar,),
         daemon=True
     )
-    hotkey_thread.start()
+    sock_thread.start()
 
-    log.info("KENWAY online. Press Alt+K anywhere to open command bar.")
+    log.info("KENWAY online. Waiting for socket trigger on /tmp/kenway.sock")
+    log.info("Bind shortcut in XFCE: bash ~/kenway/scripts/trigger.sh")
     sys.exit(app.exec_())
 
 

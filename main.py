@@ -6,13 +6,20 @@ Dual-brain architecture:
   DIRECT MODE (default) : regex rule engine, zero LLM, instant response
   LLM MODE (toggled ON) : qwen2.5:0.5b via Ollama for ambiguous commands
 
-LLM toggle lives in the system tray icon.
-Model unloads from RAM after each response (keep_alive=0).
+Ollama note: systemd service already runs at boot (installed via install.sh).
+  OLLAMA_KEEP_ALIVE=0 is set in llm_bridge.py per-request, no need to
+  restart ollama serve manually.
+
+If pyttsx3 fails: sudo apt install espeak-ng
 """
 
 import sys
 import logging
+import os
 from PyQt5.QtWidgets import QApplication
+
+# Tell Ollama to unload model from RAM immediately after each response
+os.environ.setdefault("OLLAMA_KEEP_ALIVE", "0")
 
 # Configure logging
 logging.basicConfig(
@@ -40,7 +47,7 @@ def set_llm_enabled(state: bool):
     if state:
         from core.llm_bridge import is_ollama_running
         if not is_ollama_running():
-            speak("Warning: Ollama is not running. Start it with ollama serve.")
+            speak("Warning: Ollama is not running. Run ollama serve in a terminal.")
             return
     speak(f"L L M mode is now {status}.")
 
@@ -92,11 +99,21 @@ def main():
     tray.show()
 
     # Floating input bar
-    from ui.input_bar import InputBar
-    bar = InputBar(on_submit=handle_command)
-    bar.register_hotkey()   # Super+Space
+    from ui.input_bar import KenwayInputBar
+    bar = KenwayInputBar(on_submit=handle_command)
 
-    log.info("KENWAY online.")
+    # Global hotkey: Alt+K to show input bar
+    # (Super+Space conflicts with many DEs; Alt+K is safer on XFCE)
+    try:
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        shortcut = QShortcut(QKeySequence("Alt+K"), bar)
+        shortcut.activated.connect(bar.show_bar)
+        log.info("Hotkey registered: Alt+K")
+    except Exception as e:
+        log.warning(f"Hotkey registration failed: {e}")
+
+    log.info("KENWAY online. Press Alt+K to open command bar.")
     sys.exit(app.exec_())
 
 

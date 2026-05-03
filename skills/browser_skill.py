@@ -1,43 +1,65 @@
 #!/usr/bin/env python3
 """
-skills/browser_skill.py — KENWAY Browser Skill (Phase 3 upgrade)
-YouTube: Selenium auto-clicks first video result.
-Spotify: Opens app and uses xdotool to trigger search + play.
-Fallback: xdg-open if Selenium fails for any reason.
+skills/browser_skill.py — KENWAY Browser Skill
+Fixes:
+  - YouTube: uses chromium-browser (not google-chrome) for Selenium
+  - Spotify: Tab navigation to select + play first search result reliably
 """
 
 import subprocess
 import logging
 import urllib.parse
 import time
-import os
+import shutil
 
 log = logging.getLogger("kenway.browser_skill")
 
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _xdg_open(url: str):
-    """Simple fallback — open URL in default browser."""
     subprocess.Popen(["xdg-open", url],
                      stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL)
     log.info(f"xdg-open: {url}")
 
 
+def _find_chromium() -> str:
+    """
+    Find the Chromium/Chrome binary on this system.
+    Returns the binary path or raises FileNotFoundError.
+    """
+    candidates = [
+        "chromium-browser",   # Ubuntu/Mint snap or apt
+        "chromium",           # Arch / Fedora
+        "google-chrome",      # Chrome stable
+        "google-chrome-stable",
+    ]
+    for name in candidates:
+        path = shutil.which(name)
+        if path:
+            log.info(f"Found browser binary: {path}")
+            return path
+    raise FileNotFoundError(
+        "No Chromium/Chrome binary found. "
+        "Install with: sudo apt install chromium-browser"
+    )
+
+
 def _make_driver():
     """
-    Create a Chrome WebDriver using Selenium Manager (built into Selenium 4.21).
-    Selenium Manager auto-downloads the correct chromedriver for Chrome 147.
-    No manual chromedriver installation needed.
+    Create a Selenium Chrome WebDriver pointing at Chromium.
+    Uses selenium-manager to auto-download the matching chromedriver.
     """
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
+
+    binary = _find_chromium()
 
     opts = Options()
+    opts.binary_location = binary
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
@@ -45,7 +67,6 @@ def _make_driver():
     opts.add_experimental_option("useAutomationExtension", False)
     opts.add_argument("--window-size=1280,800")
 
-    # Let Selenium Manager pick the right driver automatically
     driver = webdriver.Chrome(options=opts)
     driver.execute_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -53,13 +74,13 @@ def _make_driver():
     return driver
 
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # YOUTUBE
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 def play_on_youtube(query: str) -> str:
     """
-    Open YouTube, search for query, auto-click the first non-ad video.
+    Search YouTube and auto-click the first non-ad video result.
     Falls back to xdg-open if Selenium fails.
     """
     encoded = urllib.parse.quote_plus(query)
@@ -74,23 +95,20 @@ def play_on_youtube(query: str) -> str:
         driver = _make_driver()
         driver.get(search_url)
 
-        # Wait for video results to load (up to 10s)
-        wait = WebDriverWait(driver, 10)
+        wait = WebDriverWait(driver, 12)
 
-        # Find all video title links — skip ads (they have different structure)
+        # Wait for video title links to appear
         video_links = wait.until(
             EC.presence_of_all_elements_located(
                 (By.CSS_SELECTOR, "ytd-video-renderer a#video-title")
             )
         )
 
-        # Click the first real video result
         if video_links:
             first = video_links[0]
             title = first.get_attribute("title") or query
             driver.execute_script("arguments[0].click();", first)
             log.info(f"YouTube clicked: {title}")
-            # Keep browser open — don't quit driver, video is playing
             return f"Now playing {title} on YouTube."
         else:
             driver.quit()
@@ -102,72 +120,93 @@ def play_on_youtube(query: str) -> str:
         return f"Opened YouTube search for {query}. Click a result to play."
 
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # SPOTIFY
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _xdo(args: list, delay: float = 0.3):
+    """Run an xdotool command and wait."""
+    subprocess.run(["xdotool"] + args, capture_output=True)
+    time.sleep(delay)
+
+
+def _focus_spotify() -> bool:
+    """Focus the Spotify window. Returns True if found."""
+    result = subprocess.run(
+        ["xdotool", "search", "--name", "Spotify",
+         "windowfocus", "--sync", "windowraise"],
+        capture_output=True, timeout=6
+    )
+    return result.returncode == 0
+
 
 def play_on_spotify(query: str) -> str:
     """
-    Launch Spotify, wait for it to load, then use xdotool to:
-    1. Focus the Spotify window
-    2. Press Ctrl+L to open search
-    3. Type the query
-    4. Press Enter to search
-    5. Wait and press Enter again to play first result
+    Launch Spotify (if needed), search for query, and play the first result.
+    Strategy:
+      1. Ctrl+L  — focus search bar
+      2. Type query + Enter  — run search
+      3. Wait for results
+      4. Tab x2  — move focus into the results list (past filter chips)
+      5. Enter   — open first result (song/album/artist)
+      6. If it's a playlist/album: Space to start playback
     """
     try:
-        # Launch Spotify if not running
+        # ── 1. Launch Spotify if not running ──────────────────────────────────
         is_running = subprocess.run(
-            ["pgrep", "-x", "spotify"],
-            capture_output=True
+            ["pgrep", "-x", "spotify"], capture_output=True
         ).returncode == 0
 
         if not is_running:
             subprocess.Popen(["spotify"],
                              stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
-            log.info("Spotify launched, waiting for it to load...")
-            time.sleep(6)  # Give Spotify time to fully start
+            log.info("Spotify launched — waiting 7s for load")
+            time.sleep(7)
         else:
-            time.sleep(1)
+            time.sleep(0.5)
 
-        # Focus Spotify window
-        subprocess.run(
-            ["xdotool", "search", "--name", "Spotify", "windowfocus", "--sync"],
-            capture_output=True, timeout=5
-        )
+        # ── 2. Focus Spotify window ───────────────────────────────────────────
+        focused = _focus_spotify()
+        if not focused:
+            # Try once more after a short wait
+            time.sleep(2)
+            _focus_spotify()
         time.sleep(0.5)
 
-        # Ctrl+L = focus search bar in Spotify
-        subprocess.run(["xdotool", "key", "ctrl+l"], capture_output=True)
-        time.sleep(0.5)
+        # ── 3. Open search (Ctrl+L) ───────────────────────────────────────────
+        _xdo(["key", "ctrl+l"], delay=0.6)
 
-        # Type the search query
-        subprocess.run(["xdotool", "type", "--clearmodifiers", query],
-                       capture_output=True)
-        time.sleep(0.3)
+        # ── 4. Clear any existing text and type query ─────────────────────────
+        _xdo(["key", "ctrl+a"], delay=0.2)
+        _xdo(["type", "--clearmodifiers", "--delay", "50", query], delay=0.3)
 
-        # Press Enter to search
-        subprocess.run(["xdotool", "key", "Return"], capture_output=True)
-        time.sleep(2)
+        # ── 5. Submit search ──────────────────────────────────────────────────
+        _xdo(["key", "Return"], delay=2.5)   # wait 2.5s for results to load
 
-        # Press Enter again to play first result
-        subprocess.run(["xdotool", "key", "Return"], capture_output=True)
+        # ── 6. Navigate to first song result ─────────────────────────────────
+        # Spotify results: first few Tab presses skip past the filter pills
+        # (All / Songs / Artists / Albums …) then land on the first track row.
+        # Tab x4 reliably lands on the first "Songs" result in most layouts.
+        for _ in range(4):
+            _xdo(["key", "Tab"], delay=0.15)
+
+        # ── 7. Press Enter to play the selected item ──────────────────────────
+        _xdo(["key", "Return"], delay=0.5)
 
         log.info(f"Spotify search+play: {query}")
-        return f"Searching Spotify for {query} and playing."
+        return f"Playing {query} on Spotify."
 
     except Exception as e:
         log.error(f"Spotify xdotool error: {e}")
-        # Fallback: open Spotify search via URI
         encoded = urllib.parse.quote_plus(query)
         _xdg_open(f"spotify:search:{encoded}")
         return f"Opened Spotify search for {query}."
 
 
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 # GOOGLE / URL
-# ──────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────────
 
 def search_google(query: str) -> str:
     encoded = urllib.parse.quote_plus(query)

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 core/hooks.py — KENWAY Boot & Shutdown Hooks
-Handles greeting on startup and farewell on shutdown.
 """
 
 import logging
@@ -13,7 +12,6 @@ log = logging.getLogger("kenway.hooks")
 
 
 def _get_greeting() -> str:
-    """Return time-appropriate greeting."""
     hour = datetime.now().hour
     if hour < 12:
         return "Good morning"
@@ -24,25 +22,19 @@ def _get_greeting() -> str:
 
 
 def on_startup():
-    """
-    Called once when KENWAY starts.
-    Waits a moment for the audio system to be ready, then greets.
-    """
-    time.sleep(2)   # Let PipeWire/ALSA fully initialize
+    time.sleep(2)
     greeting = _get_greeting()
+    # Fixed: removed mention of Super+Space
     message = (
         f"{greeting}, Varun. "
-        f"KENWAY systems online. "
-        f"Press Super and Space to give me a command."
+        f"Kenway systems online. "
+        f"Press Alt and K to give me a command."
     )
     log.info(f"Startup greeting: {message}")
     speak_blocking(message)
 
 
 def on_shutdown():
-    """
-    Called before KENWAY exits.
-    """
     message = "Shutting down, Varun. Stay sharp."
     log.info(f"Shutdown: {message}")
     speak_blocking(message)

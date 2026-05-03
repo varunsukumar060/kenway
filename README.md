@@ -66,24 +66,55 @@ kenway/
 
 ## Installation
 
+### Step 1 — System dependencies
 ```bash
-# 1. Clone the repo
+sudo apt install espeak-ng tesseract-ocr python3-xlib \
+                 wmctrl xdotool chromium-chromedriver \
+                 python3-pip python3-full python3-venv playerctl
+```
+
+### Step 2 — Clone the repo
+```bash
 git clone https://github.com/varunsukumar060/kenway.git
 cd kenway
+```
 
-# 2. System dependencies
-sudo apt install espeak-ng tesseract-ocr python3-xlib \
-                 wmctrl xdotool chromium-chromedriver python3-pip
+### Step 3 — Create and activate virtual environment
+> Linux Mint 22 / Ubuntu 24.04 uses an externally-managed Python.
+> Always use a venv — never use --break-system-packages.
 
-# 3. Python dependencies
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+Your prompt changes to `(venv) varun_sukumar@...` — that means it worked.
+
+### Step 4 — Install Python packages inside venv
+```bash
 pip install -r requirements.txt
+```
 
-# 4. Ollama (for LLM mode only)
+### Step 5 — Run KENWAY
+```bash
+python3 main.py
+```
+
+> **Every time you open a new terminal to work on KENWAY, activate the venv first:**
+> ```bash
+> cd ~/kenway && source venv/bin/activate
+> ```
+
+---
+
+## Ollama Setup (LLM Mode only)
+
+Only needed if you want to toggle LLM mode ON. Not required for DIRECT MODE.
+
+```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5:1.5b
-
-# 5. Run KENWAY
-python3 main.py
+ollama serve &
 ```
 
 ---
@@ -91,10 +122,37 @@ python3 main.py
 ## Systemd Auto-start (Boot Greeting)
 
 ```bash
+nano kenway-greet.service
+# Change /home/varun/kenway path if needed
+
 mkdir -p ~/.config/systemd/user
 cp kenway-greet.service ~/.config/systemd/user/
+systemctl --user daemon-reload
 systemctl --user enable kenway-greet.service
 systemctl --user start kenway-greet.service
+```
+
+---
+
+## Daily Usage
+
+| Action | How |
+|--------|-----|
+| Open command bar | `Super + Space` |
+| Toggle LLM mode | Right-click tray icon → LLM Mode |
+| Open input bar via tray | Right-click tray → Open Input Bar |
+| Quit KENWAY | Right-click tray → Quit KENWAY |
+
+### Example Commands (Direct Mode — no LLM needed)
+```
+play gangnam style on youtube
+open vs code
+volume up
+battery status
+close spotify
+read my screen
+search python tutorials on google
+open file ~/Documents/notes.txt
 ```
 
 ---

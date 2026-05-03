@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-debug/spotify_debug.py v4
-Confirmed approach: Ctrl+K to focus search, type to active focus.
-Now finding correct Tab count to reach first song row.
+debug/spotify_debug.py v5
+Key fix: NO pause between Ctrl+K and typing.
+After each terminal input() the script re-focuses Spotify before sending keys.
 Run: python3 debug/spotify_debug.py
 """
 
@@ -13,17 +13,21 @@ QUERY = "raavana mavanda"
 def run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 
-def pause(msg):
-    return input(f"\n>>> {msg}\n    Answer: ")
+def refocus(wid):
+    """Re-grab Spotify focus after terminal input() steals it."""
+    subprocess.run(["xdotool", "windowactivate", "--sync", wid], capture_output=True)
+    subprocess.run(["xdotool", "windowraise", wid], capture_output=True)
+    time.sleep(0.5)
 
 print("=" * 60)
-print("Spotify Debugger v4 — Ctrl+K confirmed, finding Tab count")
+print("Spotify Debugger v5 — no pause between focus and type")
 print("=" * 60)
 
 # Launch
 if subprocess.run(["pgrep","-x","spotify"], capture_output=True).returncode != 0:
     print("Launching Spotify...")
     subprocess.Popen(["spotify"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print("Waiting 9s...")
     time.sleep(9)
 else:
     print("Spotify already running.")
@@ -38,60 +42,75 @@ for _ in range(12):
         print(f"WID: {wid}")
         break
     time.sleep(0.5)
-
 if not wid: sys.exit("No Spotify window found")
 
-# Activate
+# -----------------------------------------------------------------------
+# PHASE 1: Do the FULL search sequence without ANY pause in between.
+# Pausing gives terminal focus back, then xdotool types into terminal.
+# -----------------------------------------------------------------------
+print("\n[PHASE 1] Running full search sequence uninterrupted...")
+print(f"  Searching for: {QUERY}")
+print("  Watch Spotify — it should search and show results.")
+print("  (This runs automatically, no keypresses needed)")
+time.sleep(1)  # give you 1s to look at Spotify
+
+# Activate Spotify
 subprocess.run(["xdotool","windowactivate","--sync",wid], capture_output=True)
 subprocess.run(["xdotool","windowraise",wid], capture_output=True)
 time.sleep(0.8)
 
-# Ctrl+K
-print("Sending Ctrl+K...")
+# Ctrl+K — focus search
 subprocess.run(["xdotool","key","--clearmodifiers","ctrl+k"], capture_output=True)
-time.sleep(0.8)
-ans = pause("Is the search bar focused/highlighted? (yes/no)")
-if "no" in ans.lower():
-    sys.exit("Ctrl+K still not working. Need different approach.")
+time.sleep(0.8)   # wait for search bar to animate open
 
-# Clear + type
+# Clear + type — NO pause before this, Spotify still has focus
 subprocess.run(["xdotool","key","--clearmodifiers","ctrl+a"], capture_output=True)
 time.sleep(0.2)
-subprocess.run(["xdotool","type","--clearmodifiers","--delay","60", QUERY],
+subprocess.run(["xdotool","type","--clearmodifiers","--delay","80", QUERY],
                capture_output=True)
 time.sleep(0.5)
-ans = pause(f'Does search bar show "{QUERY}"? (yes/no)')
-if "no" in ans.lower():
-    sys.exit("Typing to active focus failed too. Need xclip approach.")
 
-# Enter + wait
-print("Submitting search...")
+# Enter to search
 subprocess.run(["xdotool","key","--clearmodifiers","Return"], capture_output=True)
-time.sleep(3.5)
+time.sleep(3.5)   # wait for results to load
 
-# Re-activate
+# Re-activate Spotify after results load
 subprocess.run(["xdotool","windowactivate","--sync",wid], capture_output=True)
 subprocess.run(["xdotool","windowraise",wid], capture_output=True)
 time.sleep(0.5)
 
-ans = pause("Do you see search results in Spotify? (yes/no)")
-if "no" in ans.lower():
-    sys.exit("No search results. Check Spotify is on search results page.")
+print("  Search sequence complete.")
 
-# Tab to find first song
-print("\nTabbing to find first song row...")
+# -----------------------------------------------------------------------
+# PHASE 2: Now pause and ask — terminal has focus here, that's fine
+# because we'll refocus Spotify before each Tab
+# -----------------------------------------------------------------------
+ans = input("\n>>> Do you see search results in Spotify? (yes/no): ")
+if "no" in ans.lower():
+    print("Search failed. Does the search bar show the query text?")
+    print("Check: did Spotify show the typed text before Enter?")
+    sys.exit(1)
+
+# Tab to find first song — refocus Spotify before EACH tab
+print("\n[PHASE 2] Finding correct Tab count...")
 for n in range(1, 8):
+    # Re-grab Spotify focus before sending Tab
+    refocus(wid)
     subprocess.run(["xdotool","key","--clearmodifiers","Tab"], capture_output=True)
-    time.sleep(0.4)
-    ans = pause(f"Tab {n}: What is highlighted? ")
+    time.sleep(0.5)
+    # Now terminal gets focus back for input()
+    ans = input(f"Tab {n}: What is highlighted in Spotify? ")
     print(f"  Tab {n} -> {ans}")
-    if any(w in ans.lower() for w in ["song","track","play","mavanda","first","row","result"]):
-        print(f"  First song at Tab {n}! Playing...")
+    if any(w in ans.lower() for w in ["song","track","play","mavanda","row","first","music"]):
+        print(f"\n  SONG ROW at Tab {n}! Pressing Enter to play...")
+        refocus(wid)
         subprocess.run(["xdotool","key","--clearmodifiers","Return"], capture_output=True)
-        print(f"\n  SET SPOTIFY_TAB_COUNT = {n} in skills/browser_skill.py")
+        print(f"\n  >>> SET SPOTIFY_TAB_COUNT = {n} in skills/browser_skill.py <<<")
         break
 else:
-    print("Song not found in 7 tabs.")
-    print("Try pressing Tab manually in Spotify and count to the first song row.")
+    print("\nNot found in 7 tabs.")
+    print("Open Spotify manually, do a search, then press Tab and count")
+    print("how many presses reach the first song row. Tell that number.")
 
 print("\n" + "="*60)
+print("Debug complete.")

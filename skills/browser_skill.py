@@ -3,9 +3,9 @@
 skills/browser_skill.py - KENWAY Browser Skill
 
 YouTube : Selenium + detach=True (confirmed working)
-Spotify : Click search bar at (683,42) to focus,
-          then xdotool type WITHOUT --window (types to active focus),
-          then Enter -> wait -> Tab to result -> Enter to play
+Spotify : Ctrl+K focuses search (confirmed working)
+          Type WITHOUT --window to active focus
+          Enter -> wait -> Tab to first result -> Enter to play
 """
 
 import subprocess
@@ -18,10 +18,9 @@ log = logging.getLogger("kenway.browser_skill")
 CHROME_BINARY     = "/usr/bin/google-chrome"
 CHROMEDRIVER_PATH = "/snap/chromium/current/usr/lib/chromium-browser/chromedriver"
 
-# Confirmed from debug: search bar lives at (683, 42) in Spotify window
-# Window geometry: 1366x714, position 0,82
-SPOTIFY_SEARCH_X = 683
-SPOTIFY_SEARCH_Y = 42
+# Tab count to reach first playable song after search results load.
+# Start at 1. If it opens artist/album page instead of playing: increase by 1.
+SPOTIFY_TAB_COUNT = 1
 
 
 # ---------------------------------------------------------------------------
@@ -36,8 +35,7 @@ def _xdg_open(url: str):
 
 
 def _run(cmd: list) -> str:
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    return r.stdout.strip()
+    return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 
 
 def _make_driver():
@@ -47,7 +45,7 @@ def _make_driver():
 
     opts = Options()
     opts.binary_location = CHROME_BINARY
-    opts.add_experimental_option("detach", True)
+    opts.add_experimental_option("detach", True)   # Chrome stays alive
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
@@ -64,13 +62,13 @@ def _make_driver():
 
 
 # ---------------------------------------------------------------------------
-# Spotify xdotool helpers
+# Spotify xdotool helpers — type/key always go to ACTIVE focus (no --window)
 # ---------------------------------------------------------------------------
 
 def _get_spotify_wid() -> str | None:
     out = _run(["xdotool", "search", "--name", "Spotify"])
     ids = out.splitlines()
-    return ids[-1] if ids else None  # last ID = main UI window
+    return ids[-1] if ids else None   # last ID = main UI window
 
 
 def _activate_wid(wid: str, delay: float = 0.6):
@@ -79,20 +77,15 @@ def _activate_wid(wid: str, delay: float = 0.6):
     time.sleep(delay)
 
 
-def _click_abs(screen_x: int, screen_y: int, delay: float = 0.4):
-    """Click at absolute SCREEN coordinates (not window-relative)."""
-    subprocess.run(["xdotool", "mousemove", str(screen_x), str(screen_y)],
+def _key(key: str, delay: float = 0.5):
+    """Send key to currently active/focused window."""
+    subprocess.run(["xdotool", "key", "--clearmodifiers", key],
                    capture_output=True)
-    time.sleep(0.1)
-    subprocess.run(["xdotool", "click", "1"], capture_output=True)
     time.sleep(delay)
 
 
-def _type_active(text: str, delay: float = 0.5):
-    """
-    Type into whichever window currently has keyboard focus.
-    Do NOT pass --window here — that's what broke typing before.
-    """
+def _type(text: str, delay: float = 0.5):
+    """Type into currently focused element (no --window = types to active focus)."""
     subprocess.run(
         ["xdotool", "type", "--clearmodifiers", "--delay", "60", text],
         capture_output=True
@@ -100,26 +93,8 @@ def _type_active(text: str, delay: float = 0.5):
     time.sleep(delay)
 
 
-def _key_active(key: str, delay: float = 0.4):
-    """Send key to currently focused window."""
-    subprocess.run(["xdotool", "key", "--clearmodifiers", key],
-                   capture_output=True)
-    time.sleep(delay)
-
-
-def _get_window_pos(wid: str) -> tuple[int, int]:
-    """Get absolute screen position (x, y) of window top-left."""
-    out = _run(["xdotool", "getwindowgeometry", wid])
-    wx, wy = 0, 82  # fallback from debug: Position 0,82
-    for line in out.splitlines():
-        if "Position" in line:
-            pos = line.split(":")[1].split("(")[0].strip()
-            wx, wy = map(int, pos.split(","))
-    return wx, wy
-
-
 # ---------------------------------------------------------------------------
-# YOUTUBE  (confirmed working - unchanged)
+# YOUTUBE  (confirmed working — unchanged)
 # ---------------------------------------------------------------------------
 
 def play_on_youtube(query: str) -> str:
@@ -150,6 +125,7 @@ def play_on_youtube(query: str) -> str:
         time.sleep(0.3)
         driver.execute_script("arguments[0].click();", first)
         log.info(f"YouTube clicked: {title}")
+        # detach=True — Chrome stays alive, video keeps playing
         return f"Now playing {title} on YouTube."
 
     except Exception as e:
@@ -161,18 +137,17 @@ def play_on_youtube(query: str) -> str:
 # ---------------------------------------------------------------------------
 # SPOTIFY
 #
-# Confirmed working approach from debug session:
-#   - Click at absolute screen coords (win_x + 683, win_y + 42) to focus search
-#   - xdotool type WITHOUT --window (types to active focused element)
-#   - Enter to search, wait 3.5s
-#   - Tab x1 to reach first result, Enter to play
-#
-# SPOTIFY_TAB_COUNT: start at 1. If it opens artist/album instead of
-# playing a song, increase by 1 and retry.
+# Confirmed working sequence:
+#   1. windowactivate to bring Spotify to foreground
+#   2. Ctrl+K  — focuses search bar (confirmed in debug v2)
+#   3. Ctrl+A  — select any existing text
+#   4. xdotool type (NO --window) — types to active focus = search bar
+#   5. Enter   — submit search
+#   6. wait 3.5s for results
+#   7. windowactivate again (re-grab focus after results load)
+#   8. Tab x SPOTIFY_TAB_COUNT — navigate to first song row
+#   9. Enter   — play
 # ---------------------------------------------------------------------------
-
-SPOTIFY_TAB_COUNT = 1
-
 
 def play_on_spotify(query: str) -> str:
     try:
@@ -206,40 +181,36 @@ def play_on_spotify(query: str) -> str:
         # 3. Bring Spotify to foreground
         _activate_wid(wid, delay=0.8)
 
-        # 4. Get absolute screen position of Spotify window
-        win_x, win_y = _get_window_pos(wid)
-        abs_x = win_x + SPOTIFY_SEARCH_X
-        abs_y = win_y + SPOTIFY_SEARCH_Y
-        log.info(f"Clicking search bar at screen coords ({abs_x}, {abs_y})")
+        # 4. Ctrl+K — focus search bar (confirmed working)
+        _key("ctrl+k", delay=0.8)
+        log.info("Ctrl+K sent — search bar should be focused")
 
-        # 5. Click the search bar (absolute screen coords)
-        _click_abs(abs_x, abs_y, delay=0.6)
+        # 5. Clear existing text
+        _key("ctrl+a", delay=0.2)
 
-        # 6. Select all + type query (no --window flag!)
-        _key_active("ctrl+a", delay=0.2)
-        _type_active(query, delay=0.5)
+        # 6. Type query to active focus (no --window)
+        _type(query, delay=0.5)
         log.info(f"Typed: {query}")
 
-        # 7. Submit and wait for results
-        _key_active("Return", delay=3.5)
+        # 7. Submit search, wait for results to render
+        _key("Return", delay=3.5)
 
-        # 8. Re-activate Spotify (results load may shift focus)
+        # 8. Re-activate Spotify (results loading can shift focus)
         _activate_wid(wid, delay=0.5)
 
         # 9. Tab to first song row
         for i in range(SPOTIFY_TAB_COUNT):
-            _key_active("Tab", delay=0.4)
+            _key("Tab", delay=0.4)
             log.info(f"Tab {i+1}/{SPOTIFY_TAB_COUNT}")
 
         # 10. Play
-        _key_active("Return", delay=0.5)
+        _key("Return", delay=0.5)
 
         log.info(f"Spotify play dispatched: {query}")
         return f"Playing {query} on Spotify."
 
     except Exception as e:
         log.error(f"Spotify error: {e}")
-        # Nuclear fallback: open Spotify search URI in default handler
         encoded = urllib.parse.quote_plus(query)
         _xdg_open(f"spotify:search:{encoded}")
         return f"Opened Spotify search for {query}."

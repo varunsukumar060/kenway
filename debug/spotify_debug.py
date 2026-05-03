@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 """
-debug/spotify_debug.py v3
-Tests confirmed approach:
-  - Click at absolute screen coords to focus search bar
-  - Type WITHOUT --window flag
+debug/spotify_debug.py v4
+Confirmed approach: Ctrl+K to focus search, type to active focus.
+Now finding correct Tab count to reach first song row.
 Run: python3 debug/spotify_debug.py
 """
 
 import subprocess, time, sys
 
-QUERY            = "raavana mavanda"
-SEARCH_X_OFFSET  = 683   # confirmed from v2 debug
-SEARCH_Y_OFFSET  = 42
+QUERY = "raavana mavanda"
 
 def run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
 
 def pause(msg):
-    return input(f"\n>>> {msg}\n    Press ENTER (or type answer): ")
+    return input(f"\n>>> {msg}\n    Answer: ")
 
 print("=" * 60)
-print("Spotify Debugger v3 — click + type-to-active-focus")
+print("Spotify Debugger v4 — Ctrl+K confirmed, finding Tab count")
 print("=" * 60)
 
 # Launch
@@ -29,7 +26,7 @@ if subprocess.run(["pgrep","-x","spotify"], capture_output=True).returncode != 0
     subprocess.Popen(["spotify"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(9)
 else:
-    print("Spotify running.")
+    print("Spotify already running.")
     time.sleep(0.5)
 
 # WID
@@ -38,44 +35,26 @@ for _ in range(12):
     ids = run(["xdotool","search","--name","Spotify"]).splitlines()
     if ids:
         wid = ids[-1]
-        print(f"WIDs: {ids}  Using: {wid}")
+        print(f"WID: {wid}")
         break
     time.sleep(0.5)
 
 if not wid: sys.exit("No Spotify window found")
 
-# Window position
-geo = run(["xdotool","getwindowgeometry", wid])
-print(f"Geometry: {geo}")
-wx, wy = 0, 82
-for line in geo.splitlines():
-    if "Position" in line:
-        pos = line.split(":")[1].split("(")[0].strip()
-        wx, wy = map(int, pos.split(","))
-abs_x = wx + SEARCH_X_OFFSET
-abs_y = wy + SEARCH_Y_OFFSET
-print(f"Absolute screen click target: ({abs_x}, {abs_y})")
-
 # Activate
 subprocess.run(["xdotool","windowactivate","--sync",wid], capture_output=True)
 subprocess.run(["xdotool","windowraise",wid], capture_output=True)
 time.sleep(0.8)
-pause("Spotify in foreground?")
 
-# Click search bar
-print(f"\nClicking at absolute ({abs_x}, {abs_y})...")
-subprocess.run(["xdotool","mousemove", str(abs_x), str(abs_y)], capture_output=True)
-time.sleep(0.1)
-subprocess.run(["xdotool","click","1"], capture_output=True)
-time.sleep(0.6)
-ans = pause("Is search bar active/focused now? (yes/no)")
+# Ctrl+K
+print("Sending Ctrl+K...")
+subprocess.run(["xdotool","key","--clearmodifiers","ctrl+k"], capture_output=True)
+time.sleep(0.8)
+ans = pause("Is the search bar focused/highlighted? (yes/no)")
 if "no" in ans.lower():
-    print("PROBLEM: Click did not focus search bar.")
-    print("Try moving your mouse to the search bar manually and tell me the screen coordinates.")
-    sys.exit(1)
+    sys.exit("Ctrl+K still not working. Need different approach.")
 
-# Clear + type WITHOUT --window
-print(f'\nTyping "{QUERY}" (no --window flag)...')
+# Clear + type
 subprocess.run(["xdotool","key","--clearmodifiers","ctrl+a"], capture_output=True)
 time.sleep(0.2)
 subprocess.run(["xdotool","type","--clearmodifiers","--delay","60", QUERY],
@@ -83,34 +62,36 @@ subprocess.run(["xdotool","type","--clearmodifiers","--delay","60", QUERY],
 time.sleep(0.5)
 ans = pause(f'Does search bar show "{QUERY}"? (yes/no)')
 if "no" in ans.lower():
-    print("PROBLEM: Text not appearing. xdotool type to active focus also failed.")
-    print("Will need xclip clipboard paste approach instead.")
-    sys.exit(1)
+    sys.exit("Typing to active focus failed too. Need xclip approach.")
 
-# Enter
-print("\nPress Enter to search...")
+# Enter + wait
+print("Submitting search...")
 subprocess.run(["xdotool","key","--clearmodifiers","Return"], capture_output=True)
 time.sleep(3.5)
+
+# Re-activate
 subprocess.run(["xdotool","windowactivate","--sync",wid], capture_output=True)
 subprocess.run(["xdotool","windowraise",wid], capture_output=True)
 time.sleep(0.5)
-ans = pause("Do you see SEARCH RESULTS in Spotify? (yes/no)")
-if "no" in ans.lower():
-    sys.exit("Search results not showing. Something still wrong with typing.")
 
-# Tab steps
-print("\nNow tabbing to first result...")
-for n in range(1, 7):
+ans = pause("Do you see search results in Spotify? (yes/no)")
+if "no" in ans.lower():
+    sys.exit("No search results. Check Spotify is on search results page.")
+
+# Tab to find first song
+print("\nTabbing to find first song row...")
+for n in range(1, 8):
     subprocess.run(["xdotool","key","--clearmodifiers","Tab"], capture_output=True)
     time.sleep(0.4)
-    ans = pause(f"Tab {n}: What is highlighted? (describe what you see)")
+    ans = pause(f"Tab {n}: What is highlighted? ")
     print(f"  Tab {n} -> {ans}")
-    if any(w in ans.lower() for w in ["song","track","play","mavanda","row"]):
-        print(f"  SONG FOUND at Tab {n}! Pressing Enter to play...")
+    if any(w in ans.lower() for w in ["song","track","play","mavanda","first","row","result"]):
+        print(f"  First song at Tab {n}! Playing...")
         subprocess.run(["xdotool","key","--clearmodifiers","Return"], capture_output=True)
-        time.sleep(1)
-        print("  Enter sent. Is it playing?")
+        print(f"\n  SET SPOTIFY_TAB_COUNT = {n} in skills/browser_skill.py")
         break
+else:
+    print("Song not found in 7 tabs.")
+    print("Try pressing Tab manually in Spotify and count to the first song row.")
 
 print("\n" + "="*60)
-print("Done. Report the Tab number where the song was highlighted.")

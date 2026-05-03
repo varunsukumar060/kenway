@@ -2,7 +2,7 @@ kenway:
   name: "Kenway"
   owner: "Varun"
   log_file: "kenway.log"
-  hotkey: "<super>+<space>"   # Floating input bar trigger
+  hotkey: "<alt>+k"   # Alt+K to open command bar (Super opens XFCE menu)
 
 llm:
   enabled: false              # Set to true in tray to activate LLM mode
@@ -17,14 +17,14 @@ voice:
 
 file_manager:
   allowed_read_paths:
-    - "/home/varun/Documents"
-    - "/home/varun/Desktop"
-    - "/home/varun/Projects"
-    - "/home/varun/Downloads"
+    - "/home/varun_sukumar/Documents"
+    - "/home/varun_sukumar/Desktop"
+    - "/home/varun_sukumar/Projects"
+    - "/home/varun_sukumar/Downloads"
   allowed_write_paths:
-    - "/home/varun/Documents"
-    - "/home/varun/Desktop"
-    - "/home/varun/Projects"
+    - "/home/varun_sukumar/Documents"
+    - "/home/varun_sukumar/Desktop"
+    - "/home/varun_sukumar/Projects"
 
 apps:
   allowlist:
@@ -46,4 +46,4 @@ browser:
   default: "google-chrome"
   youtube_base: "https://www.youtube.com/results?search_query="
   google_base: "https://www.google.com/search?q="
-  headless: false             # Set true to run browser silently
+  headless: false

@@ -1,0 +1,49 @@
+kenway:
+  name: "Kenway"
+  owner: "Varun"
+  log_file: "kenway.log"
+  hotkey: "<super>+<space>"   # Floating input bar trigger
+
+llm:
+  enabled: false              # Set to true in tray to activate LLM mode
+  model: "qwen2.5:1.5b"
+  endpoint: "http://localhost:11434/api/generate"
+  timeout: 30
+
+voice:
+  rate: 165                   # Speech rate (words per minute)
+  volume: 0.9                 # 0.0 to 1.0
+  voice_index: 0              # 0 = first available system voice
+
+file_manager:
+  allowed_read_paths:
+    - "/home/varun/Documents"
+    - "/home/varun/Desktop"
+    - "/home/varun/Projects"
+    - "/home/varun/Downloads"
+  allowed_write_paths:
+    - "/home/varun/Documents"
+    - "/home/varun/Desktop"
+    - "/home/varun/Projects"
+
+apps:
+  allowlist:
+    - "thunar"
+    - "mousepad"
+    - "vlc"
+    - "spotify"
+    - "code"
+    - "google-chrome"
+    - "firefox"
+    - "xfce4-terminal"
+    - "gimp"
+    - "libreoffice"
+    - "virtualbox"
+    - "arduino-ide"
+    - "cursor"
+
+browser:
+  default: "google-chrome"
+  youtube_base: "https://www.youtube.com/results?search_query="
+  google_base: "https://www.google.com/search?q="
+  headless: false             # Set true to run browser silently

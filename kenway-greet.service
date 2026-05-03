@@ -1,0 +1,16 @@
+[Unit]
+Description=KENWAY Desktop Assistant
+After=graphical-session.target sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/varun/kenway/main.py
+Restart=on-failure
+RestartSec=5
+Environment=DISPLAY=:0
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+WorkingDirectory=/home/varun/kenway
+
+[Install]
+WantedBy=default.target

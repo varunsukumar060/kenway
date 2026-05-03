@@ -1,0 +1,23 @@
+# TTS
+pyttsx3==2.90
+
+# Screen capture + OCR
+mss==9.0.1
+pytesseract==0.3.13
+Pillow==10.3.0
+
+# GUI
+PyQt5==5.15.10
+
+# Browser automation
+selenium==4.21.0
+
+# LLM bridge (Ollama HTTP)
+requests==2.31.0
+
+# Config
+PyYAML==6.0.1
+
+# System tray (PyQt5 already covers this)
+# Hotkey listener
+pynput==1.7.6

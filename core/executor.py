@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 core/executor.py — KENWAY Action Dispatcher
-Routes parsed intents to the correct skill module.
 """
 
 import logging
@@ -13,24 +12,24 @@ log = logging.getLogger("kenway.executor")
 def dispatch(intent: dict):
     action = intent.get("action", "UNKNOWN")
     data   = intent.get("data")
+    log.info(f"Dispatching action={action} data={data}")
 
-    log.info(f"Dispatching action={action} data={data} mode={intent.get('mode')}")
-
-    # ── System skills ────────────────────────────────────────────────
+    # ── System ──────────────────────────────────────────────────────────────
     if action == "VOLUME_SET":
         from skills.system_skill import set_volume
-        msg = set_volume(data)
-        speak(msg)
+        speak(set_volume(data))
 
     elif action == "BATTERY_STATUS":
         from skills.system_skill import get_battery
-        msg = get_battery()
-        speak(msg)
+        speak(get_battery())
 
     elif action == "BRIGHTNESS_SET":
         from skills.system_skill import set_brightness
-        msg = set_brightness(data)
-        speak(msg)
+        speak(set_brightness(data))
+
+    elif action == "BRIGHTNESS_GET":
+        from skills.system_skill import get_brightness
+        speak(get_brightness())
 
     elif action == "SHUTDOWN":
         speak("Shutting down your system in 5 seconds, Varun.")
@@ -38,64 +37,66 @@ def dispatch(intent: dict):
         import subprocess; subprocess.run(["shutdown", "-h", "now"])
 
     elif action == "REBOOT":
-        speak("Rebooting your system in 5 seconds, Varun.")
+        speak("Rebooting in 5 seconds, Varun.")
         import time; time.sleep(5)
         import subprocess; subprocess.run(["reboot"])
 
-    # ── App skills ─────────────────────────────────────────────────
+    # ── Apps ──────────────────────────────────────────────────────────────
     elif action == "OPEN_APP":
         from skills.app_skill import launch_app
-        msg = launch_app(data)
-        speak(msg)
+        speak(launch_app(data))
 
     elif action == "CLOSE_APP":
         from skills.app_skill import close_app
-        msg = close_app(data)
-        speak(msg)
+        speak(close_app(data))
 
-    # ── Browser skills ──────────────────────────────────────────────
+    # ── Browser ────────────────────────────────────────────────────────────
     elif action == "YOUTUBE_PLAY":
         from skills.browser_skill import play_on_youtube
-        msg = play_on_youtube(data)
-        speak(msg)
+        speak(play_on_youtube(data))
 
     elif action == "GOOGLE_SEARCH":
         from skills.browser_skill import search_google
-        msg = search_google(data)
-        speak(msg)
+        speak(search_google(data))
 
     elif action == "OPEN_URL":
         from skills.browser_skill import open_url_direct
-        msg = open_url_direct(data)
-        speak(msg)
+        speak(open_url_direct(data))
 
-    # ── File skills ─────────────────────────────────────────────────
+    # ── Folders ────────────────────────────────────────────────────────────
+    elif action == "OPEN_FOLDER":
+        from skills.folder_skill import open_folder
+        speak(open_folder(data))
+
+    elif action == "LIST_FOLDER":
+        from skills.folder_skill import list_folder_contents
+        speak(list_folder_contents(data))
+
+    # ── Files ──────────────────────────────────────────────────────────────
+    elif action == "OPEN_FILE":
+        from skills.file_skill import open_file
+        speak(open_file(data))
+
     elif action == "FILE_READ":
         from skills.file_skill import read_file
-        msg = read_file(data)
-        speak(msg)
+        speak(read_file(data))
 
     elif action == "FILE_WRITE":
-        # data is a tuple: (content, filename)
         if isinstance(data, (list, tuple)) and len(data) == 2:
             from skills.file_skill import write_file
-            msg = write_file(data[0], data[1])
-            speak(msg)
+            speak(write_file(data[0], data[1]))
         else:
-            speak("I couldn't understand the file write command.")
+            speak("I couldn't parse that file write command.")
 
     elif action == "FILE_LIST":
         from skills.file_skill import list_files
-        msg = list_files(data)
-        speak(msg)
+        speak(list_files(data))
 
-    # ── Screen skill ───────────────────────────────────────────────
     elif action == "READ_SCREEN":
         from core.screen import read_screen
-        msg = read_screen()
-        speak(msg)
+        speak(read_screen())
 
-    # ── Unknown ───────────────────────────────────────────────────
+    # ── Unknown ──────────────────────────────────────────────────────────────
     else:
-        log.warning(f"Unknown action: {action} | data: {data}")
-        speak("I don't recognise that command in direct mode. Try enabling LLM mode for complex tasks.")
+        log.warning(f"Unknown action: {action}")
+        speak("I don't recognise that command. Enable LLM mode for complex requests.")

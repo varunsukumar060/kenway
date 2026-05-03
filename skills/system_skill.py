@@ -1,84 +1,159 @@
 #!/usr/bin/env python3
 """
-skills/system_skill.py — System Controls
-Volume, brightness, battery, shutdown, reboot, sleep.
+skills/system_skill.py — KENWAY System Skill
+Handles volume, brightness, battery, and power actions.
+Brightness uses direct sysfs write for AMD GPU (amdgpu_bl1).
+Volume uses pactl (confirmed available on this system).
 """
 
 import subprocess
 import logging
-from core.voice import speak
+import os
+import yaml
 
 log = logging.getLogger("kenway.system_skill")
 
 
-def set_volume(value: str):
-    """Set volume: 'up', 'down', or a numeric percentage."""
+def _cfg():
+    path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+# ──────────────────────────────────────────────────────────────
+# VOLUME  (pactl)
+# ──────────────────────────────────────────────────────────────
+def set_volume(data: str) -> str:
+    cfg   = _cfg()["audio"]
+    step  = cfg.get("step_percent", 10)
+    data  = str(data).strip().lower()
+
     try:
-        if value == "up":
-            subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", "+10%"])
-            speak("Volume increased.")
-        elif value == "down":
-            subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", "-10%"])
-            speak("Volume decreased.")
-        elif value.isdigit():
-            subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{value}%"])
-            speak(f"Volume set to {value} percent.")
-        log.info(f"Volume set: {value}")
+        if data == "up":
+            subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"+{step}%"], check=True)
+            return f"Volume increased by {step} percent."
+
+        elif data == "down":
+            subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"-{step}%"], check=True)
+            return f"Volume decreased by {step} percent."
+
+        elif data == "mute":
+            subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "1"], check=True)
+            return "Audio muted."
+
+        elif data == "unmute":
+            subprocess.run(["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"], check=True)
+            return "Audio unmuted."
+
+        elif data.isdigit():
+            val = max(0, min(150, int(data)))
+            subprocess.run(["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{val}%"], check=True)
+            return f"Volume set to {val} percent."
+
+        else:
+            return "I didn't understand the volume command."
+
     except Exception as e:
-        speak("Failed to change volume.")
         log.error(f"Volume error: {e}")
+        return "Volume command failed."
 
 
-def get_battery():
-    """Read battery status and speak it."""
+# ──────────────────────────────────────────────────────────────
+# BRIGHTNESS  (direct sysfs — amdgpu_bl1)
+# ──────────────────────────────────────────────────────────────
+def _read_brightness() -> tuple[int, int]:
+    """Returns (current, max) brightness values."""
+    cfg = _cfg()["brightness"]
+    cur = int(open(cfg["sysfs_path"]).read().strip())
+    mx  = int(open(cfg["sysfs_max"]).read().strip())
+    return cur, mx
+
+
+def _write_brightness(value: int):
+    """Write brightness via pkexec (requires polkit) or tee with sudo."""
+    cfg  = _cfg()["brightness"]
+    path = cfg["sysfs_path"]
     try:
-        result = subprocess.run(
-            ["upower", "-i", "/org/freedesktop/UPower/devices/battery_BAT1"],
-            capture_output=True, text=True
+        # Try direct write first (works if user is in video group)
+        with open(path, "w") as f:
+            f.write(str(value))
+    except PermissionError:
+        # Fallback: use tee via subprocess with pkexec
+        subprocess.run(
+            f"echo {value} | pkexec tee {path} > /dev/null",
+            shell=True, check=True
         )
-        for line in result.stdout.splitlines():
-            if "percentage" in line:
-                pct = line.split(":")[-1].strip()
-                speak(f"Battery is at {pct}.")
-                log.info(f"Battery: {pct}")
-                return
-        speak("Could not read battery level.")
-    except Exception as e:
-        speak("Battery status unavailable.")
-        log.error(f"Battery error: {e}")
 
 
-def set_brightness(value: str):
-    """Set brightness: 'up', 'down', or 0-100."""
+def set_brightness(data: str) -> str:
+    cfg  = _cfg()["brightness"]
+    step = cfg.get("step_percent", 10)
+    data = str(data).strip().lower()
+
     try:
-        if value == "up":
-            subprocess.run(["xbacklight", "-inc", "10"])
-            speak("Brightness increased.")
-        elif value == "down":
-            subprocess.run(["xbacklight", "-dec", "10"])
-            speak("Brightness decreased.")
-        elif value.isdigit():
-            subprocess.run(["xbacklight", "-set", value])
-            speak(f"Brightness set to {value} percent.")
-        log.info(f"Brightness set: {value}")
+        cur, mx = _read_brightness()
+        cur_pct = round((cur / mx) * 100)
+
+        if data == "up":
+            new_pct = min(100, cur_pct + step)
+            new_val = round((new_pct / 100) * mx)
+            _write_brightness(new_val)
+            return f"Brightness increased to {new_pct} percent."
+
+        elif data == "down":
+            new_pct = max(5, cur_pct - step)   # floor at 5% so screen never goes black
+            new_val = round((new_pct / 100) * mx)
+            _write_brightness(new_val)
+            return f"Brightness decreased to {new_pct} percent."
+
+        elif data.isdigit():
+            new_pct = max(5, min(100, int(data)))
+            new_val = round((new_pct / 100) * mx)
+            _write_brightness(new_val)
+            return f"Brightness set to {new_pct} percent."
+
+        else:
+            return "I didn't understand the brightness command."
+
     except Exception as e:
-        speak("Failed to change brightness. xbacklight may not be installed.")
         log.error(f"Brightness error: {e}")
+        return f"Brightness control failed: {e}. Try: sudo usermod -aG video {os.environ.get('USER','varun_sukumar')}"
 
 
-def shutdown():
-    speak("Shutting down the system. Goodbye, Varun.")
-    log.info("System shutdown initiated.")
-    subprocess.run(["systemctl", "poweroff"])
+def get_brightness() -> str:
+    try:
+        cur, mx = _read_brightness()
+        pct = round((cur / mx) * 100)
+        return f"Screen brightness is at {pct} percent."
+    except Exception as e:
+        return f"Could not read brightness: {e}"
 
 
-def reboot():
-    speak("Rebooting the system. See you in a moment.")
-    log.info("System reboot initiated.")
-    subprocess.run(["systemctl", "reboot"])
+# ──────────────────────────────────────────────────────────────
+# BATTERY
+# ──────────────────────────────────────────────────────────────
+def get_battery() -> str:
+    try:
+        # Try upower first for detailed info
+        r = subprocess.run(["upower", "-i", "/org/freedesktop/UPower/devices/battery_BAT0"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            percentage, state = "", ""
+            for line in r.stdout.splitlines():
+                if "percentage" in line:
+                    percentage = line.split(":")[1].strip().rstrip("%")
+                if "state" in line and "state" == line.strip().split(":")[0].strip():
+                    state = line.split(":")[1].strip()
+            if percentage:
+                charging = " and charging" if state == "charging" else ""
+                return f"Battery is at {percentage} percent{charging}."
 
+        # Fallback: read sysfs directly
+        cap  = int(open("/sys/class/power_supply/BAT0/capacity").read().strip())
+        stat = open("/sys/class/power_supply/BAT0/status").read().strip()
+        charging = " and charging" if stat.lower() == "charging" else ""
+        return f"Battery is at {cap} percent{charging}."
 
-def sleep_system():
-    speak("Suspending system. Sleep well.")
-    log.info("System sleep initiated.")
-    subprocess.run(["systemctl", "suspend"])
+    except Exception as e:
+        log.error(f"Battery error: {e}")
+        return "Could not read battery status."

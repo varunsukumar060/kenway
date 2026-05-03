@@ -2,48 +2,167 @@ kenway:
   name: "Kenway"
   owner: "Varun"
   log_file: "kenway.log"
-  hotkey: "<alt>+k"   # Alt+K to open command bar (Super opens XFCE menu)
+  hotkey: "<alt>+k"
 
 llm:
-  enabled: false              # Set to true in tray to activate LLM mode
+  enabled: false
   model: "qwen2.5:1.5b"
   endpoint: "http://localhost:11434/api/generate"
   timeout: 30
 
 voice:
-  rate: 165                   # Speech rate (words per minute)
-  volume: 0.9                 # 0.0 to 1.0
-  voice_index: 0              # 0 = first available system voice
-
-file_manager:
-  allowed_read_paths:
-    - "/home/varun_sukumar/Documents"
-    - "/home/varun_sukumar/Desktop"
-    - "/home/varun_sukumar/Projects"
-    - "/home/varun_sukumar/Downloads"
-  allowed_write_paths:
-    - "/home/varun_sukumar/Documents"
-    - "/home/varun_sukumar/Desktop"
-    - "/home/varun_sukumar/Projects"
-
-apps:
-  allowlist:
-    - "thunar"
-    - "mousepad"
-    - "vlc"
-    - "spotify"
-    - "code"
-    - "google-chrome"
-    - "firefox"
-    - "xfce4-terminal"
-    - "gimp"
-    - "libreoffice"
-    - "virtualbox"
-    - "arduino-ide"
-    - "cursor"
+  rate: 165
+  volume: 0.9
+  voice_index: 0
 
 browser:
   default: "google-chrome"
   youtube_base: "https://www.youtube.com/results?search_query="
   google_base: "https://www.google.com/search?q="
-  headless: false
+
+brightness:
+  method: "sysfs"                          # amdgpu direct sysfs write
+  sysfs_path: "/sys/class/backlight/amdgpu_bl1/brightness"
+  sysfs_max:  "/sys/class/backlight/amdgpu_bl1/max_brightness"
+  step_percent: 10                          # % change per up/down command
+
+audio:
+  method: "pactl"                           # pactl available on this system
+  step_percent: 10
+
+folders:
+  desktop:   "/home/varun_sukumar/Desktop"
+  documents: "/home/varun_sukumar/Documents"
+  downloads: "/home/varun_sukumar/Downloads"
+  music:     "/home/varun_sukumar/Music"
+  pictures:  "/home/varun_sukumar/Pictures"
+  videos:    "/home/varun_sukumar/Videos"
+  kenway:    "/home/varun_sukumar/kenway"
+  arduino:   "/home/varun_sukumar/Arduino"
+  home:      "/home/varun_sukumar"
+
+file_manager:
+  allowed_read_paths:
+    - "/home/varun_sukumar/Documents"
+    - "/home/varun_sukumar/Desktop"
+    - "/home/varun_sukumar/Downloads"
+    - "/home/varun_sukumar/kenway"
+    - "/home/varun_sukumar/Arduino"
+  allowed_write_paths:
+    - "/home/varun_sukumar/Documents"
+    - "/home/varun_sukumar/Desktop"
+    - "/home/varun_sukumar/Downloads"
+
+# Auto-scanned app map: name -> executable
+# Covers everything found on this Lenovo E41-25 install
+apps:
+  allowlist:
+    # Browsers
+    - "google-chrome-stable"
+    - "chromium-browser"
+    - "firefox"
+    # Editors / IDEs
+    - "code"
+    - "cursor"
+    - "vim"
+    - "xed"
+    - "mousepad"
+    - "gedit"
+    # File managers
+    - "thunar"
+    # Terminals
+    - "xfce4-terminal"
+    - "terminator"
+    - "tilix"
+    - "kitty"
+    - "cool-retro-term"
+    # Media
+    - "vlc"
+    - "mpv"
+    - "celluloid"
+    - "spotify"
+    - "rhythmbox"
+    - "audacity"
+    - "obs"
+    # Office / Docs
+    - "libreoffice"
+    - "onlyoffice-desktopeditors"
+    - "xreader"
+    # Dev tools
+    - "arduino"
+    - "kicad"
+    - "librecad"
+    - "qcad"
+    - "virtualbox"
+    - "eclipse"
+    # System
+    - "stacer"
+    - "btop"
+    - "gnome-disks"
+    - "baobab"
+    - "hardinfo"
+    - "timeshift-launcher"
+    - "gufw"
+    - "synaptic-pkexec"
+    - "mintinstall"
+    - "clamtk"
+    - "transmission-gtk"
+    - "warpinator"
+    - "balena-etcher"
+    # Communication
+    - "thunderbird"
+    - "anydesk"
+    - "protonvpn-app"
+    # Productivity
+    - "gnome-calculator"
+    - "drawing"
+    - "simple-scan"
+    - "catfish"
+    - "sticky"
+    - "gimp"
+    - "pix"
+    - "xviewer"
+    - "inkscape"
+    - "scilab"
+    # Steam / Games
+    - "steam"
+
+  # Friendly name aliases -> actual binary
+  aliases:
+    "chrome":         "google-chrome-stable"
+    "google chrome":  "google-chrome-stable"
+    "browser":        "google-chrome-stable"
+    "vs code":        "code"
+    "vscode":         "code"
+    "visual studio code": "code"
+    "ai editor":      "cursor"
+    "terminal":       "xfce4-terminal"
+    "files":          "thunar"
+    "file manager":   "thunar"
+    "text editor":    "xed"
+    "notepad":        "xed"
+    "media player":   "vlc"
+    "music":          "rhythmbox"
+    "calculator":     "gnome-calculator"
+    "writer":         "libreoffice"
+    "spreadsheet":    "libreoffice"
+    "impress":        "libreoffice"
+    "draw":           "libreoffice"
+    "arduino ide":    "arduino"
+    "pcb editor":     "kicad"
+    "image editor":   "gimp"
+    "screen recorder": "obs"
+    "obs studio":     "obs"
+    "vpn":            "protonvpn-app"
+    "protonvpn":      "protonvpn-app"
+    "torrent":        "transmission-gtk"
+    "etcher":         "balena-etcher"
+    "btop":           "btop"
+    "system monitor": "stacer"
+    "firewall":       "gufw"
+    "antivirus":      "clamtk"
+    "disk":           "gnome-disks"
+    "scanner":        "simple-scan"
+    "komorebi":       "komorebi"
+    "steam":          "steam"
+    "games":          "steam"

@@ -1,76 +1,75 @@
 #!/usr/bin/env python3
 """
-skills/app_skill.py — App Launch and Close
+skills/app_skill.py — KENWAY App Launcher Skill
+Launches and closes apps using the alias map from config.yaml.
 """
 
 import subprocess
 import logging
-import yaml
 import os
-from core.voice import speak
+import yaml
 
 log = logging.getLogger("kenway.app_skill")
 
 
-def _get_allowlist() -> list:
-    config_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+def _cfg():
+    path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def _resolve(name: str) -> str:
+    """Resolve friendly name to binary using alias map, then allowlist."""
+    cfg     = _cfg()["apps"]
+    aliases = cfg.get("aliases", {})
+    name_l  = name.strip().lower()
+
+    # 1. Check alias map first
+    if name_l in aliases:
+        return aliases[name_l]
+
+    # 2. Check if it's directly in allowlist
+    for entry in cfg.get("allowlist", []):
+        if name_l == entry.lower() or name_l in entry.lower():
+            return entry
+
+    # 3. Return as-is and let subprocess try it
+    return name_l
+
+
+def launch_app(name: str) -> str:
+    binary = _resolve(name)
+    log.info(f"Launching: {binary} (requested: {name})")
     try:
-        with open(config_path, "r") as f:
-            return yaml.safe_load(f).get("apps", {}).get("allowlist", [])
-    except Exception:
-        return []
-
-
-# Map of common spoken names → actual binary names
-APP_ALIASES = {
-    "vs code": "code",
-    "vscode": "code",
-    "visual studio code": "code",
-    "cursor": "cursor",
-    "terminal": "xfce4-terminal",
-    "file manager": "thunar",
-    "files": "thunar",
-    "text editor": "mousepad",
-    "notepad": "mousepad",
-    "chrome": "google-chrome",
-    "browser": "google-chrome",
-    "vlc": "vlc",
-    "music": "spotify",
-    "virtualbox": "virtualbox",
-    "arduino": "arduino-ide",
-    "gimp": "gimp",
-}
-
-
-def launch_app(app_name: str):
-    name = APP_ALIASES.get(app_name.lower(), app_name.lower())
-    allowlist = _get_allowlist()
-
-    if name not in allowlist:
-        speak(f"{app_name} is not in my allowed applications list.")
-        log.warning(f"Launch denied: {name}")
-        return
-
-    try:
-        subprocess.Popen([name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        speak(f"Opening {app_name}.")
-        log.info(f"Launched: {name}")
+        subprocess.Popen(
+            [binary],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+        # Use friendly name in speech
+        display = name if name else binary
+        return f"Opening {display}."
     except FileNotFoundError:
-        speak(f"{app_name} is not installed or not found.")
-        log.error(f"App not found: {name}")
+        log.warning(f"Binary not found: {binary}")
+        return f"I couldn't find {name} on your system."
     except Exception as e:
-        speak(f"Failed to open {app_name}.")
-        log.error(f"Launch error for {name}: {e}")
+        log.error(f"Launch error: {e}")
+        return f"Failed to open {name}."
 
 
-def close_app(app_name: str):
-    name = APP_ALIASES.get(app_name.lower(), app_name.lower())
+def close_app(name: str) -> str:
+    binary = _resolve(name)
+    log.info(f"Closing: {binary} (requested: {name})")
     try:
-        subprocess.run(["pkill", "-f", name], check=True)
-        speak(f"Closed {app_name}.")
-        log.info(f"Closed: {name}")
-    except subprocess.CalledProcessError:
-        speak(f"No running instance of {app_name} found.")
+        result = subprocess.run(
+            ["pkill", "-f", binary],
+            capture_output=True
+        )
+        if result.returncode == 0:
+            return f"Closed {name}."
+        else:
+            return f"{name} doesn't appear to be running."
     except Exception as e:
-        speak(f"Failed to close {app_name}.")
-        log.error(f"Close error for {name}: {e}")
+        log.error(f"Close error: {e}")
+        return f"Failed to close {name}."
